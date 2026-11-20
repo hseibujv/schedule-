@@ -1,0 +1,1593 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GroupWatcher Web (Ver 1.5)</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body {
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    font-family: "Meiryo UI", Meiryo, sans-serif;
+    font-size: 13px;
+    background: #f0f0f0;
+    color: #000;
+    user-select: none;
+  }
+  .app-shell {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    height: 100dvh;
+    padding: 6px;
+    gap: 6px;
+  }
+  /* ログイン画面 */
+  .login-overlay {
+    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    background: #3a6ea5; z-index: 1000; display: flex; justify-content: center; align-items: center;
+  }
+  .login-box {
+    background: #fff; padding: 24px; border-radius: 6px;
+    box-shadow: 0 10px 25px rgba(0,0,0,0.3); color: #333; width: 320px; text-align: center;
+  }
+  .login-box h2 { margin-top: 0; color: #2b579a; font-size: 17px; }
+  .login-input {
+    width: 100%; padding: 8px; margin: 10px 0; border: 1px solid #ccc;
+    border-radius: 4px; text-align: center; font-size: 16px;
+  }
+
+  /* 上部固定ツールバー */
+  .sticky-top-bar { flex-shrink: 0; z-index: 40; }
+  .toolbar {
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+    background: #e4e9f2; padding: 5px 8px; border: 1px solid #999; gap: 6px;
+  }
+  .toolbar-left, .toolbar-right { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+  button, select, input, textarea { font-family: "Meiryo UI", Meiryo, sans-serif; font-size: 13px; }
+  .btn {
+    padding: 3px 8px; border: 1px solid #777;
+    background: linear-gradient(to bottom, #fff, #dcdcdc);
+    cursor: pointer; border-radius: 2px; color: #000;
+  }
+  .btn:hover:not(:disabled) { background: #e8f0fe; }
+  .btn:disabled { opacity: 0.45; cursor: default; }
+  .btn.active { background: #3b5998; color: #fff; border-color: #1d3567; font-weight: bold; }
+  .btn-danger { color: #b00000; }
+  .current-period-label { font-size: 14px; font-weight: bold; margin: 0 4px; }
+  .clipboard-status {
+    font-size: 11px; color: #1d3567; background: #d9e1f2;
+    padding: 2px 6px; border-radius: 3px; border: 1px solid #8faadc;
+  }
+
+  /* カレンダー本体（この枠内で縦・横スクロールし、上部の日付行と左端の部署列を固定） */
+  .calendar-wrapper {
+    flex: 1;
+    overflow: auto;
+    -webkit-overflow-scrolling: touch;
+    background: #fff;
+    border: 1px solid #888;
+    position: relative;
+  }
+  table.cal-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    table-layout: fixed;
+    min-width: 780px;
+  }
+  table.cal-table th, table.cal-table td {
+    border-right: 1px solid #888;
+    border-bottom: 1px solid #888;
+    vertical-align: top;
+    padding: 0;
+  }
+  /* 上部の曜日・日付ヘッダー固定 */
+  table.cal-table thead th {
+    position: sticky;
+    top: 0;
+    z-index: 30;
+    border-top: 1px solid #888;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.12);
+  }
+  /* 左上の「部署」角セル（縦にも横にも固定） */
+  .col-dept-header {
+    width: 92px;
+    background: #d9e1f2;
+    text-align: center;
+    vertical-align: middle !important;
+    font-weight: bold;
+    padding: 4px !important;
+    position: sticky !important;
+    top: 0;
+    left: 0;
+    z-index: 35 !important;
+    border-left: 1px solid #888;
+  }
+  .day-header { padding: 4px 6px !important; font-weight: bold; text-align: left; height: 32px; }
+  .day-header .holiday-name { font-size: 11px; font-weight: normal; margin-left: 4px; }
+
+  /* 左端の部署名列（横にスライドしても左端に固定） */
+  .dept-cell {
+    background: #e9edf4;
+    font-weight: bold;
+    padding: 6px 4px !important;
+    word-break: break-all;
+    position: sticky;
+    left: 0;
+    z-index: 20;
+    border-left: 1px solid #888;
+    box-shadow: 1px 0 2px rgba(0,0,0,0.1);
+  }
+
+  /* 背景色 */
+  .bg-weekday { background: #ffffe8; }
+  .bg-sat { background: #e6f2ff; }
+  .bg-sun { background: #ffe6e6; }
+  .bg-outmonth { background: #e8e8e8; color: #888; }
+  .text-sat { color: #0033cc; }
+  .text-sun { color: #cc0000; }
+
+  /* 行構造 */
+  .row-wrapper { position: relative; min-height: 74px; }
+  .row-wrapper.month-mode { min-height: 105px; }
+  .bg-grid { position: absolute; top: 0; left: 0; right: 0; bottom: 0; display: grid; z-index: 1; }
+  .bg-cell { border-right: 1px solid #888; height: 100%; }
+  .bg-cell:last-child { border-right: none; }
+  .bg-cell:hover { filter: brightness(0.97); }
+  .bg-cell.selected-cell { outline: 2px dashed #1a73e8; outline-offset: -2px; filter: brightness(0.94); }
+  .bg-cell.drag-over { background: #cfe2ff !important; outline: 2px dashed #004085; outline-offset: -2px; }
+
+  .events-grid {
+    position: relative; display: grid; grid-auto-rows: max-content;
+    align-content: start; padding: 2px 0 14px 0; z-index: 2; pointer-events: none;
+  }
+  .grid-7 { grid-template-columns: repeat(7, 1fr); }
+  .grid-1 { grid-template-columns: 1fr; }
+  .month-day-num {
+    padding: 2px 5px; font-weight: bold; font-size: 12px; height: 22px;
+    border-bottom: 1px dotted rgba(0,0,0,0.15); pointer-events: none;
+  }
+  .month-day-spacer { height: 23px; pointer-events: none; }
+
+  /* 予定バー（最大2行制限） */
+  .event-bar {
+    pointer-events: auto; align-self: start; margin: 1px 2px; padding: 1px 4px;
+    font-size: 12px; line-height: 1.3; cursor: grab; border-radius: 1px;
+    word-break: break-all; display: -webkit-box; -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical; overflow: hidden; max-height: 33px;
+  }
+  .event-bar:active { cursor: grabbing; }
+  .event-bar.multi-day-bar { border: 1px solid #444; text-align: center; }
+  .event-bar.transparent-bg { padding: 1px 3px; }
+  .event-bar:hover { outline: 1px solid #333; z-index: 5; }
+  .event-bar.selected-event {
+    outline: 2px solid #0055ff !important;
+    box-shadow: 0 0 6px rgba(0,85,255,0.6); z-index: 6;
+  }
+
+  /* 右クリックメニュー */
+  .context-menu {
+    display: none; position: fixed; background: #fff; border: 1px solid #666;
+    box-shadow: 2px 3px 10px rgba(0,0,0,0.3); z-index: 200; min-width: 170px; padding: 3px 0;
+  }
+  .context-menu.show { display: block; }
+  .context-item { padding: 5px 12px; cursor: pointer; display: flex; justify-content: space-between; font-size: 12.5px; }
+  .context-item:hover { background: #3b5998; color: #fff; }
+  .context-item.disabled { color: #aaa; pointer-events: none; }
+  .context-divider { height: 1px; background: #ddd; margin: 3px 0; }
+
+  /* スマホ用右下「＋」ボタン */
+  .fab-add {
+    position: fixed; bottom: 18px; right: 18px; width: 52px; height: 52px;
+    border-radius: 50%; background: #2b579a; color: #fff; font-size: 28px;
+    border: none; box-shadow: 0 3px 8px rgba(0,0,0,0.4); cursor: pointer; z-index: 50;
+  }
+
+  /* モーダル共通 */
+  .modal-backdrop {
+    display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    background: rgba(0,0,0,0.45); z-index: 100; justify-content: center; align-items: center; padding: 10px;
+  }
+  .modal-backdrop.show { display: flex; }
+  .modal-window {
+    background: #f0f0f0; border: 2px solid #555; border-radius: 4px;
+    width: 100%; max-width: 550px; max-height: 92vh; overflow-y: auto;
+    box-shadow: 0 5px 20px rgba(0,0,0,0.4);
+  }
+  .modal-titlebar {
+    background: linear-gradient(to right, #3a6ea5, #7fa7d7); color: #fff;
+    font-weight: bold; padding: 6px 10px; display: flex; justify-content: space-between; align-items: center;
+  }
+  .modal-close {
+    background: #d9534f; color: #fff; border: 1px solid #a94442;
+    font-weight: bold; cursor: pointer; padding: 0 6px;
+  }
+  .modal-body { padding: 12px; }
+  .form-row { display: flex; align-items: center; margin-bottom: 8px; flex-wrap: wrap; gap: 6px; }
+  .form-label { width: 75px; font-weight: bold; flex-shrink: 0; }
+  .form-field { flex: 1; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .input-full { width: 100%; padding: 4px; }
+  .time-combo { width: 90px; padding: 3px 4px; }
+  .memo-area { width: 100%; height: 85px; resize: vertical; padding: 6px; margin-top: 4px; }
+
+  /* カスタム分類ドロップダウン */
+  .custom-cat-dropdown { position: relative; width: 210px; }
+  .custom-cat-selected {
+    border: 1px solid #777; padding: 3px 24px 3px 8px; cursor: pointer;
+    position: relative; min-height: 25px; display: flex; align-items: center; background: #fff;
+  }
+  .custom-cat-selected::after {
+    content: "▼"; font-size: 10px; color: #333; position: absolute; right: 6px;
+    top: 50%; transform: translateY(-50%); background: rgba(255,255,255,0.75); padding: 1px 2px;
+  }
+  .custom-cat-list {
+    display: none; position: absolute; top: 100%; left: 0; width: 100%;
+    max-height: 260px; overflow-y: auto; border: 1px solid #444; background: #fff;
+    z-index: 150; box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+  }
+  .custom-cat-list.open { display: block; }
+  .custom-cat-option { padding: 2px 8px; cursor: pointer; font-size: 13px; border-bottom: 1px solid rgba(0,0,0,0.08); }
+  .custom-cat-option:hover { outline: 2px solid #000; outline-offset: -2px; }
+
+  .modal-footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; padding-top: 8px; border-top: 1px solid #ccc; }
+  .settings-section { background: #fff; border: 1px solid #ccc; padding: 8px; margin-bottom: 10px; }
+  .settings-list { max-height: 150px; overflow-y: auto; border: 1px solid #ddd; margin-bottom: 6px; }
+  .settings-item { display: flex; align-items: center; justify-content: space-between; padding: 3px 6px; border-bottom: 1px solid #eee; gap: 6px; }
+
+  .drop-zone {
+    border: 3px dashed #3a6ea5; border-radius: 8px; background: #f8fbff;
+    padding: 32px 16px; text-align: center; color: #2b579a; cursor: pointer;
+    transition: all 0.2s; margin: 10px 0;
+  }
+  .drop-zone.dragover { background: #d9e8fb; border-color: #1d3567; transform: scale(1.01); }
+</style>
+</head>
+<body>
+
+<!-- ログイン画面 -->
+<div class="login-overlay" id="loginOverlay" style="display:none;">
+  <div class="login-box">
+    <h2>🔒 スケジューラー ログイン</h2>
+    <div style="font-size:11px; color:#666; margin-bottom:8px;">初期パスワード: <b>1234</b></div>
+    <input type="password" id="loginPassword" class="login-input" placeholder="パスワードを入力" onkeydown="if(event.key==='Enter') attemptLogin()">
+    <div style="margin-bottom:14px; font-size:12px;">
+      <label><input type="checkbox" id="loginAuto" checked> 次回からパスワード入力を省略する</label>
+    </div>
+    <button class="btn" style="width:100%; padding:8px; font-weight:bold; background:#2b579a; color:#fff;" onclick="attemptLogin()">ログイン</button>
+  </div>
+</div>
+
+<div class="app-shell">
+  <!-- 上部固定ツールバー -->
+  <div class="sticky-top-bar">
+    <div class="toolbar">
+      <div class="toolbar-left">
+        <span>表示:</span>
+        <button class="btn" id="btnMode1" onclick="changeViewMode(1)">1</button>
+        <button class="btn active" id="btnMode7" onclick="changeViewMode(7)">7</button>
+        <button class="btn" id="btnMode31" onclick="changeViewMode(31)">31</button>
+        <select id="monthDeptSelect" style="display:none; margin-left:4px; padding:2px;" onchange="renderCalendar()"></select>
+        <button class="btn" id="btnNavPrev" onclick="navigatePeriod(-1)">前週</button>
+        <button class="btn" id="btnNavToday" onclick="navigatePeriod(0)">今週</button>
+        <button class="btn" id="btnNavNext" onclick="navigatePeriod(1)">次週</button>
+        <span class="current-period-label" id="periodLabel"></span>
+      </div>
+      <div class="toolbar-right">
+        <span id="clipboardStatus" class="clipboard-status" style="display:none;"></span>
+        <button class="btn" id="btnCopy" onclick="copySelectedEvent()" disabled>📋 コピー</button>
+        <button class="btn" id="btnCut" onclick="cutSelectedEvent()" disabled>✂️ 切り取り</button>
+        <button class="btn" id="btnPaste" onclick="pasteToSelectedCell()" disabled>📋 貼り付け</button>
+        <button class="btn btn-danger" id="btnDeleteTop" onclick="deleteSelectedEvent()" disabled>🗑️ 削除</button>
+        <button class="btn" onclick="openEventModalNew()">＋ 追加</button>
+        <button class="btn" onclick="openImportModal()">📂 インポート</button>
+        <button class="btn" onclick="openSettingsModal()">⚙️ 設定</button>
+        <button class="btn" onclick="logoutApp()" title="ログアウト">🔒</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- カレンダー描画領域 -->
+  <div class="calendar-wrapper" id="calendarContainer"></div>
+</div>
+
+<button class="fab-add" onclick="openEventModalNew()">＋</button>
+
+<!-- 右クリックメニュー -->
+<div class="context-menu" id="contextMenu">
+  <div class="context-item" id="ctxEdit" onclick="ctxAction('edit')"><span>✏️ 編集を開く</span><small>Wクリック</small></div>
+  <div class="context-item" id="ctxCopy" onclick="ctxAction('copy')"><span>📋 コピー</span><small>Ctrl+C</small></div>
+  <div class="context-item" id="ctxCut" onclick="ctxAction('cut')"><span>✂️ 切り取り</span><small>Ctrl+X</small></div>
+  <div class="context-item" id="ctxPaste" onclick="ctxAction('paste')"><span>📋 ここに貼り付け</span><small>Ctrl+V</small></div>
+  <div class="context-divider"></div>
+  <div class="context-item" id="ctxNew" onclick="ctxAction('new')"><span>➕ ここに新規追加</span></div>
+  <div class="context-item" id="ctxDelete" style="color:#c00;" onclick="ctxAction('delete')"><span>🗑️ 削除</span><small>Delete</small></div>
+</div>
+
+<datalist id="timeOptionsList"></datalist>
+
+<!-- ① スケジュール追加・編集モーダル -->
+<div class="modal-backdrop" id="eventModal">
+  <div class="modal-window">
+    <div class="modal-titlebar">
+      <span id="eventModalTitle">スケジュールの追加</span>
+      <button class="modal-close" onclick="closeEventModal()">×</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="evId">
+      <div class="form-row">
+        <div class="form-label">名前：</div>
+        <div class="form-field">
+          <select id="evTargetType" onchange="onTargetTypeChange()">
+            <option value="dept">部署</option>
+            <option value="all">全グループ</option>
+          </select>
+          <select id="evDeptId" style="flex:1;"></select>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-label">開始日時：</div>
+        <div class="form-field">
+          <input type="date" id="evStartDate" onchange="onStartDateChange()">
+          <span>時刻</span>
+          <input type="text" id="evStartTime" list="timeOptionsList" class="time-combo" placeholder="例 08:30">
+          <label><input type="checkbox" id="evIsMultiDay" onchange="onMultiDayChange()"> 複数日</label>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-label">終了日時：</div>
+        <div class="form-field">
+          <input type="date" id="evEndDate" disabled>
+          <span>時刻</span>
+          <input type="text" id="evEndTime" list="timeOptionsList" class="time-combo" placeholder="例 17:00">
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-label">内容：</div>
+        <div class="form-field">
+          <input type="text" id="evContent" class="input-full" maxlength="35" oninput="enforceContentLimit(this)" placeholder="最大35文字（保存時に英数・カナ・記号は自動で半角化）">
+          <span id="evCharCount" style="font-size:11px; color:#666;">0 / 35文字</span>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-label">分類：</div>
+        <div class="form-field">
+          <input type="hidden" id="evCategory">
+          <div class="custom-cat-dropdown" id="customCatDropdown">
+            <div class="custom-cat-selected" id="customCatSelected" onclick="toggleCustomCatList(event)">なし</div>
+            <div class="custom-cat-list" id="customCatList"></div>
+          </div>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-label">スタイル：</div>
+        <div class="form-field">
+          <label><input type="checkbox" id="evBold"> <b>太字</b></label>
+          <label><input type="checkbox" id="evItalic"> <i>斜体</i></label>
+          <label><input type="checkbox" id="evUnderline"> <u>下線</u></label>
+          <label><input type="checkbox" id="evStrike"> <s>取り消し線</s></label>
+        </div>
+      </div>
+      <div>
+        <div style="font-weight:bold;">詳細メモ <span style="font-weight:normal; font-size:11px; color:#555;">（※入力すると内容末尾に「/★」が付きます）</span>：</div>
+        <textarea id="evMemo" class="memo-area" placeholder="詳細なメモを入力（任意）"></textarea>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" id="btnDeleteEvent" style="background:#d9534f; color:#fff; margin-right:auto; display:none;" onclick="deleteEventFromModal()">削除</button>
+        <button class="btn" style="min-width:80px; font-weight:bold;" onclick="saveEvent()">OK</button>
+        <button class="btn" onclick="closeEventModal()">キャンセル</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ② データインポート専用モーダル -->
+<div class="modal-backdrop" id="importModal">
+  <div class="modal-window">
+    <div class="modal-titlebar">
+      <span>📂 GroupWatcherデータ / CSV 一括インポート</span>
+      <button class="modal-close" onclick="closeImportModal()">×</button>
+    </div>
+    <div class="modal-body">
+      <div style="font-size:12px; color:#333; line-height:1.5; margin-bottom:8px;">
+        ・<b>「部署」親フォルダごと</b>、<b>各部署フォルダごと</b>、または <b>.sch / .dtl / .csv ファイル</b>を下の枠にドロップしてください。<br>
+        ・フォルダ名から部署を、ファイル名（例: <code>202611.sch</code>）から年月を自動判定し、同月の <code>.dtl</code>（詳細メモ）と自動合体します。
+      </div>
+      <div class="settings-section" style="margin-bottom:8px; background:#f9f9f9;">
+        <div style="font-size:11.5px; color:#555; margin-bottom:4px;">※ファイル単体でドロップする場合の初期割当先（フォルダ選択時はフォルダ名を優先）：</div>
+        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+          <span>部署:</span>
+          <select id="importFallbackDept" style="padding:2px;"></select>
+          <span>年月:</span>
+          <input type="month" id="importFallbackYM" value="2026-11" style="padding:2px;">
+        </div>
+      </div>
+      <div class="drop-zone" id="importDropZone"
+           ondragover="onImportDragOver(event)"
+           ondragleave="onImportDragLeave(event)"
+           ondrop="onImportDrop(event)"
+           onclick="document.getElementById('importFilesInput').click()">
+        <div style="font-size:28px; margin-bottom:6px;">📥</div>
+        <div style="font-weight:bold; font-size:14px;">ここにフォルダ または ファイルをドラッグ＆ドロップ</div>
+        <div style="font-size:11.5px; color:#666; margin-top:4px;">（またはここをクリックしてファイルを選択）</div>
+        <div id="importProgressText" style="margin-top:10px; font-weight:bold; color:#d9534f;"></div>
+      </div>
+      <input type="file" id="importFilesInput" multiple accept=".sch,.dtl,.csv,.txt" style="display:none;" onchange="onImportFileSelect(this)">
+      <div class="modal-footer">
+        <button class="btn" style="min-width:90px; font-weight:bold;" onclick="closeImportModal()">閉じる</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ③ 設定モーダル -->
+<div class="modal-backdrop" id="settingsModal">
+  <div class="modal-window">
+    <div class="modal-titlebar">
+      <span>⚙️ マスター設定（部署・分類・パスワード管理）</span>
+      <button class="modal-close" onclick="closeSettingsModal()">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="settings-section">
+        <div style="font-weight:bold; margin-bottom:4px;">■ 縦軸の項目（部署）の管理</div>
+        <div class="settings-list" id="settingsDeptList"></div>
+        <div style="display:flex; gap:6px;">
+          <input type="text" id="newDeptName" placeholder="新しい部署名..." style="flex:1; padding:3px;">
+          <button class="btn" onclick="addDept()">＋ 追加</button>
+        </div>
+      </div>
+      <div class="settings-section">
+        <div style="font-weight:bold; margin-bottom:4px;">■ 分類（色分け）の管理</div>
+        <div class="settings-list" id="settingsCatList"></div>
+        <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+          <input type="text" id="newCatName" placeholder="新しい分類名..." style="flex:1; min-width:110px; padding:3px;">
+          <label style="font-size:12px;">文字:<input type="color" id="newCatText" value="#000000"></label>
+          <label style="font-size:12px;">背景:<input type="color" id="newCatBg" value="#ffff00"></label>
+          <label style="font-size:12px;"><input type="checkbox" id="newCatTrans">背景なし</label>
+          <button class="btn" onclick="addCategory()">＋ 追加</button>
+        </div>
+      </div>
+      <div class="settings-section">
+        <div style="font-weight:bold; margin-bottom:4px;">🔒 ログインパスワード変更（※要管理者PW / 初期値: admin）</div>
+        <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+          <input type="password" id="adminAuthPw" placeholder="管理者PW" style="width:110px; padding:3px;">
+          <input type="text" id="newUserPw" placeholder="新しいログインPW" style="flex:1; padding:3px;">
+          <button class="btn" onclick="changeLoginPassword()">変更する</button>
+        </div>
+      </div>
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <button class="btn" onclick="resetSampleData()" style="font-size:11px;">初期サンプルデータに戻す(要管理者PW)</button>
+        <button class="btn" style="min-width:90px; font-weight:bold;" onclick="closeSettingsModal()">閉じる</button>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+// ★重要：下のシングルクォーテーションの中に、Apps ScriptのウェブアプリURL（.../exec）を貼り付けてください！
+const GAS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbxuK-cPzSIlHpqxVZnMiDWeAUSGrz82EgKkheu4k4ngHs-LyqUTQW9fXqufoON1qkcAfA/exec';
+
+// ================= 全角→半角 自動変換関数 =================
+const KANA_MAP = {
+  'ガ':'ｶﾞ','ギ':'ｷﾞ','グ':'ｸﾞ','ゲ':'ｹﾞ','ゴ':'ｺﾞ','ザ':'ｻﾞ','ジ':'ｼﾞ','ズ':'ｽﾞ','ゼ':'ｾﾞ','ゾ':'ｿﾞ',
+  'ダ':'ﾀﾞ','ヂ':'ﾁﾞ','ヅ':'ﾂﾞ','デ':'ﾃﾞ','ド':'ﾄﾞ','バ':'ﾊﾞ','ビ':'ﾋﾞ','ブ':'ﾌﾞ','ベ':'ﾍﾞ','ボ':'ﾎﾞ',
+  'パ':'ﾊﾟ','ピ':'ﾋﾟ','プ':'ﾌﾟ','ペ':'ﾍﾟ','ポ':'ﾎﾟ','ヴ':'ｳﾞ','ヷ':'ﾜﾞ','ヺ':'ｦﾞ',
+  'ア':'ｱ','イ':'ｲ','ウ':'ｳ','エ':'ｴ','オ':'ｵ','カ':'ｶ','キ':'ｷ','ク':'ｸ','ケ':'ｹ','コ':'ｺ',
+  'サ':'ｻ','シ':'ｼ','ス':'ｽ','セ':'ｾ','ソ':'ｿ','タ':'ﾀ','チ':'ﾁ','ツ':'ﾂ','テ':'ﾃ','ト':'ﾄ',
+  'ナ':'ﾅ','ニ':'ﾆ','ヌ':'ﾇ','ネ':'ﾈ','ノ':'ﾉ','ハ':'ﾊ','ヒ':'ﾋ','フ':'ﾌ','ヘ':'ﾍ','ホ':'ﾎ',
+  'マ':'ﾏ','ミ':'ﾐ','ム':'ﾑ','メ':'ﾒ','モ':'ﾓ','ヤ':'ﾔ','ユ':'ﾕ','ヨ':'ﾖ',
+  'ラ':'ﾗ','リ':'ﾘ','ル':'ﾙ','レ':'ﾚ','ロ':'ﾛ','ワ':'ﾜ','ヲ':'ｦ','ン':'ﾝ',
+  'ァ':'ｧ','ィ':'ｨ','ゥ':'ｩ','ェ':'ｪ','ォ':'ｫ','ッ':'ｯ','ャ':'ｬ','ュ':'ｭ','ョ':'ｮ',
+  'ー':'ｰ','・':'･','「':'｢','」':'｣','。':'｡','、':'､'
+};
+function toHalfWidthAll(str) {
+  if (!str) return '';
+  let s = str.replace(/[！-～]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0));
+  s = s.replace(/　/g, ' ').replace(/[‐－―]/g, '-').replace(/〜/g, '~').replace(/×/g, '*');
+  let res = '';
+  for (let ch of s) { res += (KANA_MAP[ch] !== undefined) ? KANA_MAP[ch] : ch; }
+  return res;
+}
+
+// ================= 初期データ定義（Ver 1.6 GitHub & Cloud） =================
+const DEFAULT_DEPTS = [
+  { id: 'd1', name: '水処理' }, { id: 'd2', name: '汚泥処理' }, { id: 'd3', name: 'ポンプ場' },
+  { id: 'd4', name: '点検' }, { id: 'd5', name: '保守' }, { id: 'd6', name: '入荷関係' },
+  { id: 'd7', name: '搬出関係' }, { id: 'd8', name: '水質管理' }, { id: 'd9', name: '事務' },
+  { id: 'd10', name: '休暇・出張' }, { id: 'd11', name: '来社予定者' }
+];
+const DEFAULT_CATEGORIES = [
+  { id: 'c0',  name: 'なし',           textColor: '#000000', bgColor: 'transparent' },
+  { id: 'c1',  name: '会議・打合',     textColor: '#0000cc', bgColor: 'transparent' },
+  { id: 'c2',  name: '休暇',           textColor: '#cc0000', bgColor: '#80ffff' },
+  { id: 'c3',  name: '勤務変更',       textColor: '#000000', bgColor: '#00ffff' },
+  { id: 'c4',  name: 'プライベート',   textColor: '#996600', bgColor: '#80ffff' },
+  { id: 'c5',  name: '業務予定',       textColor: '#cc00cc', bgColor: 'transparent' },
+  { id: 'c6',  name: '出張・外出',     textColor: '#6600cc', bgColor: '#ffff99' },
+  { id: 'c7',  name: '社内研修・訓練', textColor: '#cc0000', bgColor: '#99ff99' },
+  { id: 'c8',  name: '社外研修・教育', textColor: '#000080', bgColor: '#ffcc00' },
+  { id: 'c9',  name: '来客・来所',     textColor: '#000000', bgColor: '#ff99ff' },
+  { id: 'c10', name: '見学',           textColor: '#000000', bgColor: '#ff8080' },
+  { id: 'c11', name: '計装設備点検',   textColor: '#ffffff', bgColor: '#3366ff' },
+  { id: 'c12', name: '重要',           textColor: '#ff0000', bgColor: '#ffff00' },
+  { id: 'c13', name: '操作あり',       textColor: '#000000', bgColor: '#33cc33' },
+  { id: 'c14', name: '現場操作あり',   textColor: '#800000', bgColor: '#c0c0c0' },
+  { id: 'c15', name: '立会い',         textColor: '#0000ff', bgColor: '#ffff99' },
+  { id: 'c16', name: '操作・立会い',   textColor: '#ff0000', bgColor: '#000000' },
+  { id: 'c17', name: '水質関係試験',   textColor: '#ffffff', bgColor: '#8000ff' },
+  { id: 'c18', name: '電気設備点検',   textColor: '#ffff00', bgColor: '#0033cc' },
+  { id: 'c19', name: '通行止め・通行', textColor: '#00ffff', bgColor: '#993300' },
+  { id: 'c20', name: '安全行事',       textColor: '#ffff00', bgColor: '#ff0000' },
+  { id: 'c21', name: '役所工事・修理', textColor: '#ffffff', bgColor: '#993366' },
+  { id: 'c22', name: '消防設備点検',   textColor: '#ffffff', bgColor: '#ffbb77' },
+  { id: 'c23', name: '除草・剪定',     textColor: '#ffffff', bgColor: '#008000' },
+  { id: 'c24', name: '定期点検',       textColor: '#00ff00', bgColor: '#002060' },
+  { id: 'c25', name: 'KV発注工事',     textColor: '#ffffff', bgColor: '#808000' },
+  { id: 'c26', name: '免許資格試験',   textColor: '#ffff00', bgColor: '#800000' }
+];
+
+const DEFAULT_EVENTS = [
+  { id: 'e1', deptId: 'd1', startDate: '2026-11-16', endDate: '2026-11-21', startTime: '', endTime: '', isMultiDay: true, content: '太陽光発電設備導入事業(中電工)', categoryId: 'c21', bold: false, italic: false, underline: false, strike: false, memo: '' },
+  { id: 'e2', deptId: 'd1', startDate: '2026-11-16', endDate: '2026-11-20', startTime: '', endTime: '', isMultiDay: true, content: '沈砂池機械設備工事', categoryId: 'c21', bold: false, italic: false, underline: false, strike: false, memo: '中尾インフラクリエイト' },
+  { id: 'e3', deptId: 'd1', startDate: '2026-11-17', endDate: '2026-11-17', startTime: '13:30', endTime: '', isMultiDay: false, content: '現場生成AI研修(Web)', categoryId: 'c7', bold: false, italic: false, underline: false, strike: false, memo: '' },
+  { id: 'e4', deptId: 'd1', startDate: '2026-11-19', endDate: '2026-11-19', startTime: '', endTime: '', isMultiDay: false, content: '沈砂池 ﾎﾟﾝﾌﾟ棟', categoryId: 'c11', bold: false, italic: false, underline: false, strike: false, memo: '油面計、分配井' },
+  { id: 'e5', deptId: 'd1', startDate: '2026-11-20', endDate: '2026-11-20', startTime: '13:00', endTime: '14:30', isMultiDay: false, content: '東西送水停止(ﾒﾝﾃの為)', categoryId: 'c13', bold: false, italic: false, underline: false, strike: false, memo: '電磁流量計メンテ' }
+];
+
+const HOLIDAYS = {
+  '2025-11-03': '文化の日', '2025-11-23': '勤労感謝の日', '2025-11-24': '振替休日',
+  '2026-01-01': '元日', '2026-01-12': '成人の日', '2026-02-11': '建国記念の日', '2026-02-23': '天皇誕生日', '2026-03-20': '春分の日',
+  '2026-04-29': '昭和の日', '2026-05-03': '憲法記念日', '2026-05-04': 'みどりの日', '2026-05-05': 'こどもの日', '2026-05-06': '振替休日',
+  '2026-07-20': '海の日', '2026-08-11': '山の日', '2026-09-21': '敬老の日', '2026-09-22': '国民の休日', '2026-09-23': '秋分の日',
+  '2026-10-12': 'スポーツの日', '2026-11-03': '文化の日', '2026-11-23': '勤労感謝の日'
+};
+
+const DATA_VERSION = 'v1.6_cloud';
+let viewMode = 7;
+let baseDate = new Date(2026, 10, 19);
+let depts = [], categories = [], events = [];
+let selectedEventId = null, selectedCell = null, clipboardEvent = null, isCutMode = false, draggedEventId = null;
+
+const IS_GAS = (typeof google !== 'undefined' && google.script && google.script.run);
+const HAS_REMOTE_URL = (typeof GAS_WEB_APP_URL === 'string' && GAS_WEB_APP_URL.indexOf('https://script.google.com/') === 0);
+const IS_CLOUD_ENABLED = IS_GAS || HAS_REMOTE_URL;
+let lastCloudUpdatedAt = '';
+let isSavingCloud = false;
+let isSyncingCloud = false;
+
+function setSyncStatus(text, color = '#1d3567') {
+  let el = document.getElementById('cloudSyncBadge');
+  if (!el) {
+    const rightBar = document.querySelector('.toolbar-right');
+    if (!rightBar) return;
+    el = document.createElement('span');
+    el.id = 'cloudSyncBadge';
+    el.style.cssText = 'font-size:11px; padding:2px 6px; border-radius:3px; background:#fff; border:1px solid #aaa; font-weight:bold;';
+    const refreshBtn = document.createElement('button');
+    refreshBtn.className = 'btn';
+    refreshBtn.textContent = '🔄 最新読込';
+    refreshBtn.onclick = () => syncFromCloud(true, true);
+    rightBar.insertBefore(refreshBtn, rightBar.firstChild);
+    rightBar.insertBefore(el, rightBar.firstChild);
+  }
+  el.textContent = text;
+  el.style.color = color;
+}
+
+function isUserEditingModal() {
+  const em = document.getElementById('eventModal');
+  const sm = document.getElementById('settingsModal');
+  const im = document.getElementById('importModal');
+  return (em && em.classList.contains('show')) ||
+         (sm && sm.classList.contains('show')) ||
+         (im && im.classList.contains('show')) ||
+         !!draggedEventId;
+}
+
+// Apps Script内部でも、GitHub Pages(外部fetch)でも共通で動くクラウド通信ラッパー
+function callCloudLoad(onSuccess, onError) {
+  if (IS_GAS) {
+    google.script.run.withSuccessHandler(onSuccess).withFailureHandler(onError).loadCloudData();
+  } else if (HAS_REMOTE_URL) {
+    fetch(GAS_WEB_APP_URL + '?action=load&t=' + Date.now(), { method: 'GET', redirect: 'follow' })
+      .then(r => r.json())
+      .then(onSuccess)
+      .catch(onError);
+  }
+}
+
+function callCloudSave(payload, onSuccess, onError) {
+  if (IS_GAS) {
+    google.script.run.withSuccessHandler(onSuccess).withFailureHandler(onError).saveCloudData(payload);
+  } else if (HAS_REMOTE_URL) {
+    fetch(GAS_WEB_APP_URL, {
+      method: 'POST',
+      redirect: 'follow',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action: 'save', payload })
+    })
+      .then(r => r.json())
+      .then(onSuccess)
+      .catch(onError);
+  }
+}
+
+// ================= ログイン・パスワード制御 =================
+function getUserPassword() { return localStorage.getItem('gw_user_pw') || '1234'; }
+function getAdminPassword() { return localStorage.getItem('gw_admin_pw') || 'admin'; }
+function checkLoginOnStart() {
+  if (localStorage.getItem('gw_auto_login') === 'true') {
+    document.getElementById('loginOverlay').style.display = 'none';
+  } else {
+    document.getElementById('loginOverlay').style.display = 'flex';
+    setTimeout(() => document.getElementById('loginPassword').focus(), 50);
+  }
+}
+function attemptLogin() {
+  const inputPw = document.getElementById('loginPassword').value;
+  if (inputPw === getUserPassword() || inputPw === getAdminPassword()) {
+    if (document.getElementById('loginAuto').checked) localStorage.setItem('gw_auto_login', 'true');
+    document.getElementById('loginOverlay').style.display = 'none';
+  } else {
+    alert('パスワードが正しくありません。');
+  }
+}
+function logoutApp() {
+  localStorage.removeItem('gw_auto_login');
+  document.getElementById('loginPassword').value = '';
+  document.getElementById('loginOverlay').style.display = 'flex';
+}
+function changeLoginPassword() {
+  const adminInput = document.getElementById('adminAuthPw').value;
+  const newPw = document.getElementById('newUserPw').value.trim();
+  if (adminInput !== getAdminPassword()) { alert('管理者パスワードが正しくありません。（初期値: admin）'); return; }
+  if (!newPw) { alert('新しいログインパスワードを入力してください。'); return; }
+  localStorage.setItem('gw_user_pw', newPw);
+  saveData();
+  document.getElementById('adminAuthPw').value = '';
+  document.getElementById('newUserPw').value = '';
+  alert('ログインパスワードを変更しました！（クラウドにも反映されました）');
+}
+
+// ================= データ読込・保存・リアルタイム自動同期 =================
+function loadData() {
+  depts = JSON.parse(localStorage.getItem('gw_depts')) || DEFAULT_DEPTS;
+  categories = JSON.parse(localStorage.getItem('gw_categories')) || DEFAULT_CATEGORIES;
+  events = JSON.parse(localStorage.getItem('gw_events')) || DEFAULT_EVENTS;
+  if (IS_CLOUD_ENABLED) {
+    syncFromCloud(false, true);
+    setInterval(() => {
+      if (!document.hidden && !isUserEditingModal() && !isSavingCloud) {
+        syncFromCloud(false, false);
+      }
+    }, 15000);
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden && !isUserEditingModal() && !isSavingCloud) {
+        syncFromCloud(false, false);
+      }
+    });
+  }
+}
+
+function syncFromCloud(showNotice = false, forceRender = false) {
+  if (!IS_CLOUD_ENABLED || isSyncingCloud || isSavingCloud) return;
+  isSyncingCloud = true;
+  if (showNotice || forceRender) setSyncStatus('☁️ 同期中...', '#b36b00');
+  callCloudLoad(
+    res => {
+      isSyncingCloud = false;
+      if (res && (res.gw_events || res.gw_depts || res.gw_categories)) {
+        const remoteUpdatedAt = res.gw_updated_at || '';
+        const hasChanged = forceRender || !lastCloudUpdatedAt || (remoteUpdatedAt !== lastCloudUpdatedAt);
+        if (hasChanged) {
+          if (res.gw_depts) { depts = JSON.parse(res.gw_depts); localStorage.setItem('gw_depts', res.gw_depts); }
+          if (res.gw_categories) { categories = JSON.parse(res.gw_categories); localStorage.setItem('gw_categories', res.gw_categories); }
+          if (res.gw_events) { events = JSON.parse(res.gw_events); localStorage.setItem('gw_events', res.gw_events); }
+          if (res.gw_user_pw) { localStorage.setItem('gw_user_pw', res.gw_user_pw); }
+          lastCloudUpdatedAt = remoteUpdatedAt;
+          populateSelectors();
+          renderCalendar();
+        }
+        setSyncStatus('☁️ 自動同期ON', '#006600');
+        if (showNotice) alert('クラウドから最新データを読み込みました！');
+      } else {
+        saveData();
+      }
+    },
+    err => {
+      isSyncingCloud = false;
+      setSyncStatus('⚠️ 通信エラー', '#cc0000');
+      console.error(err);
+    }
+  );
+}
+
+function saveData() {
+  const dStr = JSON.stringify(depts);
+  const cStr = JSON.stringify(categories);
+  const eStr = JSON.stringify(events);
+  const pwStr = getUserPassword();
+  localStorage.setItem('gw_version', DATA_VERSION);
+  localStorage.setItem('gw_depts', dStr);
+  localStorage.setItem('gw_categories', cStr);
+  localStorage.setItem('gw_events', eStr);
+
+  if (IS_CLOUD_ENABLED) {
+    isSavingCloud = true;
+    setSyncStatus('☁️ 保存中...', '#b36b00');
+    callCloudSave(
+      { gw_depts: dStr, gw_categories: cStr, gw_events: eStr, gw_user_pw: pwStr },
+      res => {
+        isSavingCloud = false;
+        if (res && res.updatedAt) lastCloudUpdatedAt = String(res.updatedAt);
+        setSyncStatus('☁️ 自動同期ON', '#006600');
+      },
+      err => {
+        isSavingCloud = false;
+        setSyncStatus('⚠️ 保存失敗', '#cc0000');
+        alert('クラウドへの保存に失敗しました: ' + err);
+      }
+    );
+  }
+}
+
+function resetSampleData() {
+  const pw = prompt('初期データに戻すには管理者パスワードを入力してください（初期値: admin）');
+  if (pw !== getAdminPassword()) { alert('管理者パスワードが違います。'); return; }
+  depts = JSON.parse(JSON.stringify(DEFAULT_DEPTS));
+  categories = JSON.parse(JSON.stringify(DEFAULT_CATEGORIES));
+  events = JSON.parse(JSON.stringify(DEFAULT_EVENTS));
+  baseDate = new Date(2026, 10, 19);
+  selectedEventId = null; selectedCell = null; clipboardEvent = null;
+  saveData(); populateSelectors(); renderSettingsLists(); renderCalendar();
+}
+
+// ================= 専用インポートモーダル＆フォルダ一括取込 =================
+function ensureFolderSelectButton() {
+  if (document.getElementById('importFolderInput')) return;
+  const dz = document.getElementById('importDropZone');
+  if (!dz) return;
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'text-align:center; margin-bottom:8px;';
+  wrap.innerHTML = `
+    <button type="button" class="btn" style="padding:6px 14px; font-weight:bold; background:#2b579a; color:#fff; border:none; border-radius:4px;" onclick="document.getElementById('importFolderInput').click()">
+      📁 フォルダごと選択して一括取込（「部署」親フォルダ・各部署フォルダ対応）
+    </button>
+    <input type="file" id="importFolderInput" webkitdirectory directory multiple style="display:none;" onchange="onImportFolderSelect(this)">
+  `;
+  dz.parentNode.insertBefore(wrap, dz.nextSibling);
+}
+
+function openImportModal() {
+  ensureFolderSelectButton();
+  resetImportModalState();
+  document.getElementById('importModal').classList.add('show');
+}
+function closeImportModal() {
+  resetImportModalState();
+  document.getElementById('importModal').classList.remove('show');
+}
+function resetImportModalState() {
+  const fi = document.getElementById('importFilesInput'); if (fi) fi.value = '';
+  const fo = document.getElementById('importFolderInput'); if (fo) fo.value = '';
+  const pt = document.getElementById('importProgressText'); if (pt) pt.textContent = '';
+  const dz = document.getElementById('importDropZone'); if (dz) dz.classList.remove('dragover');
+}
+function onImportDragOver(e) { e.preventDefault(); e.currentTarget.classList.add('dragover'); }
+function onImportDragLeave(e) { e.currentTarget.classList.remove('dragover'); }
+
+async function traverseEntry(entry, parentFolderName = '') {
+  if (entry.isFile) {
+    return new Promise(resolve => {
+      entry.file(file => resolve([{ file, folderName: parentFolderName }]), () => resolve([]));
+    });
+  } else if (entry.isDirectory) {
+    if (entry.name === '返流水設備') return [];
+    const dirReader = entry.createReader();
+    let allEntries = [];
+    const readBatch = () => new Promise(res => {
+      dirReader.readEntries(batch => {
+        if (!batch || batch.length === 0) res();
+        else { allEntries = allEntries.concat(batch); readBatch().then(res); }
+      }, () => res());
+    });
+    await readBatch();
+    let results = [];
+    for (const child of allEntries) {
+      const childRes = await traverseEntry(child, entry.name);
+      results = results.concat(childRes);
+    }
+    return results;
+  }
+  return [];
+}
+
+async function onImportDrop(e) {
+  e.preventDefault();
+  e.currentTarget.classList.remove('dragover');
+  const items = e.dataTransfer.items;
+  let fileRecords = [];
+  if (items && items.length > 0 && items[0].webkitGetAsEntry) {
+    const entries = [];
+    for (let i = 0; i < items.length; i++) {
+      const ent = items[i].webkitGetAsEntry();
+      if (ent) entries.push(ent);
+    }
+    for (const ent of entries) {
+      const res = await traverseEntry(ent, '');
+      fileRecords = fileRecords.concat(res);
+    }
+  }
+  if (fileRecords.length === 0 && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+    const files = e.dataTransfer.files;
+    for (let i = 0; i < files.length; i++) {
+      fileRecords.push({ file: files[i], folderName: '' });
+    }
+  }
+  await processImportedFileRecords(fileRecords);
+}
+
+async function onImportFileSelect(input) {
+  const files = input.files;
+  const fileRecords = [];
+  for (let i = 0; i < files.length; i++) {
+    fileRecords.push({ file: files[i], folderName: '' });
+  }
+  await processImportedFileRecords(fileRecords);
+}
+
+async function onImportFolderSelect(input) {
+  const files = input.files;
+  const fileRecords = [];
+  for (let i = 0; i < files.length; i++) {
+    const f = files[i];
+    const rel = f.webkitRelativePath || '';
+    const parts = rel.split('/');
+    const parentFolder = parts.length >= 2 ? parts[parts.length - 2] : '';
+    fileRecords.push({ file: f, folderName: parentFolder });
+  }
+  await processImportedFileRecords(fileRecords);
+}
+
+function readFileAsShiftJis(file) {
+  return new Promise(resolve => {
+    const reader = new FileReader();
+    reader.onload = e => resolve(e.target.result || '');
+    reader.onerror = () => resolve('');
+    reader.readAsText(file, 'Shift_JIS');
+  });
+}
+
+function isDigitsOnly(str) {
+  if (!str) return false;
+  for (let i = 0; i < str.length; i++) {
+    const c = str.charCodeAt(i);
+    if (c < 48 || c > 57) return false;
+  }
+  return true;
+}
+
+async function processImportedFileRecords(fileRecords) {
+  const validExts = ['sch', 'dtl', 'csv', 'txt'];
+  const validRecords = fileRecords.filter(r => {
+    if (!r.file || !r.file.name || r.file.size === 0) return false;
+    const parts = r.file.name.split('.');
+    if (parts.length < 2) return false;
+    const ext = parts[parts.length - 1].toLowerCase();
+    return validExts.includes(ext);
+  });
+
+  if (validRecords.length === 0) {
+    alert('取り込めるファイル（.sch / .dtl / .csv / .txt）が見つかりませんでした。\n※フォルダごと取り込む場合は、下の青い「📁 フォルダごと選択して一括取込」ボタンをお使いください。');
+    resetImportModalState();
+    return;
+  }
+
+  const progEl = document.getElementById('importProgressText');
+  progEl.textContent = `全 ${validRecords.length} ファイルを解析・取込中です...`;
+
+  const fallbackDeptId = document.getElementById('importFallbackDept').value || depts[0].id;
+  const fallbackYM = document.getElementById('importFallbackYM').value || '2026-11';
+
+  const groups = {};
+  for (const rec of validRecords) {
+    if (rec.folderName === '返流水設備') continue;
+    const matchedDept = depts.find(d => d.name === rec.folderName);
+    const deptId = matchedDept ? matchedDept.id : fallbackDeptId;
+
+    const nameParts = rec.file.name.split('.');
+    const ext = nameParts.pop().toLowerCase();
+    const baseName = nameParts.join('.');
+
+    let ymStr = fallbackYM;
+    if (baseName.length >= 6) {
+      const last6 = baseName.slice(-6);
+      if (isDigitsOnly(last6)) {
+        ymStr = last6.slice(0, 4) + '-' + last6.slice(4, 6);
+      }
+    }
+
+    const key = `${deptId}__${ymStr}`;
+    if (!groups[key]) groups[key] = { deptId, ymStr, schTexts: [], dtlTexts: [], csvTexts: [] };
+
+    const text = await readFileAsShiftJis(rec.file);
+    if (ext === 'dtl') groups[key].dtlTexts.push(text);
+    else if (ext === 'csv') groups[key].csvTexts.push(text);
+    else groups[key].schTexts.push(text);
+  }
+
+  let addedCount = 0;
+  let updatedCount = 0;
+  let skippedCount = 0;
+  let lastImportedDate = null;
+
+  for (const key of Object.keys(groups)) {
+    const grp = groups[key];
+    const [yearNum, monthNum] = grp.ymStr.split('-').map(Number);
+    const memoMap = {};
+    const schLines = [];
+
+    const combinedText = grp.dtlTexts.concat(grp.schTexts).join('\n');
+    const allRawLines = combinedText.split('\n').map(l => l.replace(/\r/g, '')).filter(l => l.trim().length > 0);
+
+    allRawLines.forEach(line => {
+      const commaIdx = line.indexOf(',');
+      const head3 = line.slice(0, 3);
+      if (commaIdx === 3 && isDigitsOnly(head3)) {
+        const memoId = head3;
+        const memoBody = line.slice(4).split(',').map(s => s.replace(/^"|"$/g, '').trim()).filter(Boolean).join('\n');
+        memoMap[memoId] = memoBody;
+      } else {
+        schLines.push(line);
+      }
+    });
+
+    schLines.forEach(line => {
+      if (line.length < 16) return;
+      const dayStr = line.slice(0, 2);
+      if (!isDigitsOnly(dayStr)) return;
+      const dayNum = parseInt(dayStr, 10);
+      const timeField = line.slice(2, 12).trim();
+
+      let flagIdx = -1;
+      for (let i = 12; i <= Math.min(line.length - 4, 34); i++) {
+        const sub = line.slice(i, i + 4);
+        if (/^[01]{4}$/.test(sub)) {
+          flagIdx = i;
+          break;
+        }
+      }
+      if (flagIdx === -1) return;
+
+      const catName = line.slice(12, flagIdx).trim();
+      const styleFlags = line.slice(flagIdx, flagIdx + 4);
+      let rest = line.slice(flagIdx + 4);
+
+      let startTime = '', endTime = '';
+      if (timeField.length >= 4) {
+        if (timeField.length >= 9) {
+          startTime = toHalfWidthAll(timeField.slice(0, 5).trim());
+          endTime = toHalfWidthAll(timeField.slice(5).trim());
+        } else {
+          startTime = toHalfWidthAll(timeField);
+        }
+      }
+
+      let spanDays = 1;
+      let memoId = '';
+      const trimmedRest = rest.trimEnd();
+      const lastSpaceIdx = trimmedRest.lastIndexOf(' ');
+      if (lastSpaceIdx !== -1) {
+        const lastToken = trimmedRest.slice(lastSpaceIdx + 1);
+        if (lastToken.includes('$') && lastToken.length >= 5 && isDigitsOnly(lastToken.slice(0, 5))) {
+          memoId = lastToken.slice(0, 3);
+          spanDays = Math.max(1, parseInt(lastToken.slice(3, 5), 10));
+          rest = trimmedRest.slice(0, lastSpaceIdx);
+        } else if (lastToken.length === 3 && isDigitsOnly(lastToken) && trimmedRest.slice(lastSpaceIdx - 1, lastSpaceIdx + 1) === '  ') {
+          memoId = lastToken;
+          rest = trimmedRest.slice(0, lastSpaceIdx);
+        }
+      }
+
+      const content = toHalfWidthAll(rest.trim()).slice(0, 35);
+      if (!content) return;
+      const startDateObj = new Date(yearNum, monthNum - 1, dayNum);
+      const endDateObj = addDays(startDateObj, spanDays - 1);
+      const sDateStr = formatDate(startDateObj);
+      const eDateStr = formatDate(endDateObj);
+      const catObj = categories.find(c => c.name === catName) || categories[0];
+      const memoText = (memoId && memoId !== '000' && memoMap[memoId]) ? memoMap[memoId] : '';
+
+      const existing = events.find(ev =>
+        ev.deptId === grp.deptId &&
+        ev.startDate === sDateStr &&
+        ev.endDate === eDateStr &&
+        (ev.startTime || '') === startTime &&
+        ev.content === content
+      );
+
+      if (existing) {
+        let changed = false;
+        if (memoText && existing.memo !== memoText) { existing.memo = memoText; changed = true; }
+        if (existing.categoryId !== catObj.id && catObj.id !== 'c0') { existing.categoryId = catObj.id; changed = true; }
+        if (changed) updatedCount++;
+        else skippedCount++;
+      } else {
+        events.push({
+          id: 'gw_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
+          deptId: grp.deptId,
+          startDate: sDateStr,
+          endDate: eDateStr,
+          startTime,
+          endTime,
+          isMultiDay: spanDays > 1,
+          content,
+          categoryId: catObj.id,
+          bold: styleFlags[0] === '1',
+          italic: styleFlags[1] === '1',
+          underline: styleFlags[2] === '1',
+          strike: styleFlags[3] === '1',
+          memo: memoText
+        });
+        addedCount++;
+        lastImportedDate = startDateObj;
+      }
+    });
+
+    grp.csvTexts.join('\n').split('\n').map(l => l.replace(/\r/g, '')).forEach(line => {
+      if (!line.includes(',')) return;
+      const cols = line.split(',');
+      if (cols[0] === 'Subject' || cols[0] === '件名') return;
+      if (cols.length >= 2) {
+        const dParts = cols[1].trim().split(/[-/]/).map(Number);
+        if (dParts.length === 3 && dParts[0] > 1990) {
+          const sDateObj = new Date(dParts[0], dParts[1] - 1, dParts[2]);
+          const sDateStr = formatDate(sDateObj);
+          const content = toHalfWidthAll(cols[0].replace(/^"|"$/g, '').trim()).slice(0, 35);
+          if (!content) return;
+          const existing = events.find(ev => ev.deptId === grp.deptId && ev.startDate === sDateStr && ev.content === content);
+          if (existing) { skippedCount++; }
+          else {
+            events.push({
+              id: 'csv_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
+              deptId: grp.deptId, startDate: sDateStr, endDate: sDateStr, startTime: '', endTime: '',
+              isMultiDay: false, content, categoryId: 'c0', bold: false, italic: false, underline: false, strike: false, memo: ''
+            });
+            addedCount++;
+            lastImportedDate = sDateObj;
+          }
+        }
+      }
+    });
+  }
+
+  saveData();
+  if (lastImportedDate) baseDate = lastImportedDate;
+  renderCalendar();
+
+  resetImportModalState();
+  closeImportModal();
+  alert(`インポートが完了しました！（クラウドへ自動保存中）\n・新規追加: ${addedCount} 件\n・差分更新: ${updatedCount} 件\n・重複スキップ: ${skippedCount} 件`);
+}
+// ================= 日付ユーティリティ =================
+const DAY_NAMES = ['日', '月', '火', '水', '木', '金', '土'];
+function formatDate(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+function parseDate(str) {
+  const [y, m, d] = str.split('-').map(Number);
+  return new Date(y, m - 1, d);
+}
+function addDays(d, n) {
+  const r = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  r.setDate(r.getDate() + n);
+  return r;
+}
+function diffDays(s1, s2) {
+  return Math.round((parseDate(s2) - parseDate(s1)) / 86400000);
+}
+function getMonday(d) {
+  const r = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const day = r.getDay();
+  r.setDate(r.getDate() + ((day === 0 ? -6 : 1) - day));
+  return r;
+}
+function getDayBgClass(dateStr, isOut = false) {
+  if (isOut) return 'bg-outmonth';
+  const d = parseDate(dateStr);
+  if (HOLIDAYS[dateStr] || d.getDay() === 0) return 'bg-sun';
+  if (d.getDay() === 6) return 'bg-sat';
+  return 'bg-weekday';
+}
+function getDayTextClass(dateStr) {
+  const d = parseDate(dateStr);
+  if (HOLIDAYS[dateStr] || d.getDay() === 0) return 'text-sun';
+  if (d.getDay() === 6) return 'text-sat';
+  return '';
+}
+
+// ================= カレンダー表示制御 =================
+function changeViewMode(mode) {
+  viewMode = mode;
+  document.getElementById('btnMode1').classList.toggle('active', mode === 1);
+  document.getElementById('btnMode7').classList.toggle('active', mode === 7);
+  document.getElementById('btnMode31').classList.toggle('active', mode === 31);
+  document.getElementById('monthDeptSelect').style.display = (mode === 31) ? 'inline-block' : 'none';
+
+  const bPrev = document.getElementById('btnNavPrev');
+  const bToday = document.getElementById('btnNavToday');
+  const bNext = document.getElementById('btnNavNext');
+  if (mode === 1) { bPrev.textContent = '前日'; bToday.textContent = '当日'; bNext.textContent = '翌日'; }
+  else if (mode === 7) { bPrev.textContent = '前週'; bToday.textContent = '今週'; bNext.textContent = '次週'; }
+  else { bPrev.textContent = '前月'; bToday.textContent = '今月'; bNext.textContent = '次月'; }
+  renderCalendar();
+}
+
+function navigatePeriod(dir) {
+  if (dir === 0) baseDate = new Date(2026, 10, 19);
+  else if (viewMode === 1) baseDate = addDays(baseDate, dir);
+  else if (viewMode === 7) baseDate = addDays(baseDate, dir * 7);
+  else baseDate = new Date(baseDate.getFullYear(), baseDate.getMonth() + dir, 1);
+  renderCalendar();
+}
+
+function renderCalendar() {
+  const container = document.getElementById('calendarContainer');
+  if (viewMode === 1) {
+    renderMatrixView(container, [baseDate]);
+  } else if (viewMode === 7) {
+    const mon = getMonday(baseDate);
+    renderMatrixView(container, Array.from({ length: 7 }, (_, i) => addDays(mon, i)));
+  } else {
+    renderMonthView(container);
+  }
+  updateActionButtons();
+}
+
+function renderMatrixView(container, days) {
+  const labelEl = document.getElementById('periodLabel');
+  if (days.length === 1) {
+    labelEl.textContent = `${days[0].getFullYear()}年${days[0].getMonth() + 1}月${days[0].getDate()}日(${DAY_NAMES[days[0].getDay()]})`;
+  } else {
+    labelEl.textContent = `${days[0].getFullYear()}年${days[0].getMonth() + 1}月${days[0].getDate()}日 ～ ${days[6].getMonth() + 1}月${days[6].getDate()}日`;
+  }
+  const gridClass = days.length === 1 ? 'grid-1' : 'grid-7';
+  let html = `<table class="cal-table"><thead><tr><th class="col-dept-header">部署</th>`;
+  days.forEach(d => {
+    const dStr = formatDate(d);
+    const hol = HOLIDAYS[dStr] ? `<span class="holiday-name">${HOLIDAYS[dStr]}</span>` : '';
+    const label = (d.getDate() === 1 || d === days[0]) ? `${d.getMonth() + 1}/${d.getDate()}` : `${d.getDate()}`;
+    html += `<th class="day-header ${getDayBgClass(dStr)} ${getDayTextClass(dStr)}">${label} (${DAY_NAMES[d.getDay()]})${hol}</th>`;
+  });
+  html += `</tr></thead><tbody>`;
+  depts.forEach(dept => {
+    html += `<tr><td class="dept-cell">${escapeHtml(dept.name)}</td><td colspan="${days.length}">${buildWeekRowGridHtml(dept.id, days, gridClass, false)}</td></tr>`;
+  });
+  container.innerHTML = html + `</tbody></table>`;
+}
+
+function renderMonthView(container) {
+  const selectedDeptId = document.getElementById('monthDeptSelect').value || (depts[0] && depts[0].id);
+  const year = baseDate.getFullYear(), month = baseDate.getMonth();
+  document.getElementById('periodLabel').textContent = `${year}年 ${month + 1}月`;
+  const lastDay = new Date(year, month + 1, 0);
+  let cur = getMonday(new Date(year, month, 1));
+  const weeks = [];
+  while (cur <= lastDay || weeks.length < 5) {
+    weeks.push(Array.from({ length: 7 }, (_, i) => addDays(cur, i)));
+    cur = addDays(cur, 7);
+    if (weeks.length >= 6) break;
+  }
+  let html = `<table class="cal-table"><thead><tr>`;
+  ['月', '火', '水', '木', '金', '土', '日'].forEach((w, i) => {
+    const cls = i === 5 ? 'bg-sat text-sat' : (i === 6 ? 'bg-sun text-sun' : 'bg-weekday');
+    html += `<th class="day-header ${cls}" style="text-align:center; height:28px;">${w}</th>`;
+  });
+  html += `</tr></thead><tbody>`;
+  weeks.forEach(wDays => {
+    html += `<tr><td colspan="7">${buildWeekRowGridHtml(selectedDeptId, wDays, 'grid-7', true, month)}</td></tr>`;
+  });
+  container.innerHTML = html + `</tbody></table>`;
+}
+
+function buildWeekRowGridHtml(deptId, days, gridClass, isMonthMode, currentMonth = null) {
+  const startStr = formatDate(days[0]), endStr = formatDate(days[days.length - 1]);
+  const rowEvents = events.filter(ev => ev.deptId === deptId && !(ev.endDate < startStr || ev.startDate > endStr));
+  rowEvents.sort((a, b) => {
+    const aSpan = (a.isMultiDay || a.startDate !== a.endDate) ? 1 : 0;
+    const bSpan = (b.isMultiDay || b.startDate !== b.endDate) ? 1 : 0;
+    if (aSpan !== bSpan) return bSpan - aSpan;
+    if (a.startDate !== b.startDate) return a.startDate.localeCompare(b.startDate);
+    return (a.startTime || '').localeCompare(b.startTime || '');
+  });
+  let html = `<div class="row-wrapper ${isMonthMode ? 'month-mode' : ''}"><div class="bg-grid ${gridClass}">`;
+  days.forEach(d => {
+    const dStr = formatDate(d);
+    const isOut = isMonthMode && d.getMonth() !== currentMonth;
+    const isSel = selectedCell && selectedCell.deptId === deptId && selectedCell.dateStr === dStr;
+    let dayNumHeader = '';
+    if (isMonthMode) {
+      const hol = HOLIDAYS[dStr] ? ` <span style="font-weight:normal;font-size:11px;">${HOLIDAYS[dStr]}</span>` : '';
+      dayNumHeader = `<div class="month-day-num ${getDayTextClass(dStr)}">${d.getDate() === 1 ? (d.getMonth() + 1) + '/1' : d.getDate()}${hol}</div>`;
+    }
+    html += `<div class="bg-cell ${getDayBgClass(dStr, isOut)} ${isSel ? 'selected-cell' : ''}" onclick="selectCell(event, '${deptId}', '${dStr}')" ondblclick="openEventModalNew('${deptId}', '${dStr}')" oncontextmenu="onCellContextMenu(event, '${deptId}', '${dStr}')" ondragover="onCellDragOver(event)" ondragleave="onCellDragLeave(event)" ondrop="onCellDrop(event, '${deptId}', '${dStr}')">${dayNumHeader}</div>`;
+  });
+  html += `</div><div class="events-grid ${gridClass}">`;
+  if (isMonthMode) html += `<div class="month-day-spacer" style="grid-column: 1 / -1; grid-row: 1;"></div>`;
+  const baseRowOffset = isMonthMode ? 2 : 1;
+  const lanes = [];
+  rowEvents.forEach(ev => {
+    const sIdx = Math.max(0, days.findIndex(d => formatDate(d) >= ev.startDate));
+    let eIdx = days.findIndex(d => formatDate(d) > ev.endDate);
+    if (eIdx === -1) eIdx = days.length;
+    const span = Math.max(1, eIdx - sIdx);
+    let laneIndex = 0;
+    while (true) {
+      if (!lanes[laneIndex]) lanes[laneIndex] = Array(days.length).fill(false);
+      let conflict = false;
+      for (let c = sIdx; c < sIdx + span; c++) if (lanes[laneIndex][c]) { conflict = true; break; }
+      if (!conflict) { for (let c = sIdx; c < sIdx + span; c++) lanes[laneIndex][c] = true; break; }
+      laneIndex++;
+    }
+    const cat = categories.find(c => c.id === ev.categoryId) || categories[0];
+    const isTrans = !cat || cat.bgColor === 'transparent';
+    let fontStyles = (ev.bold ? 'font-weight:bold;' : '') + (ev.italic ? 'font-style:italic;' : '');
+    const decos = []; if (ev.underline) decos.push('underline'); if (ev.strike) decos.push('line-through');
+    if (decos.length) fontStyles += `text-decoration:${decos.join(' ')};`;
+    const timePrefix = (ev.startTime && ev.endTime) ? `${ev.startTime}-${ev.endTime} ` : (ev.startTime ? `${ev.startTime} ` : '');
+    const hasMemo = ev.memo && ev.memo.trim().length > 0;
+    const displayContent = timePrefix + ev.content + (hasMemo ? '/★' : '');
+    const isMultiBar = ev.isMultiDay || (ev.startDate !== ev.endDate);
+    const titleAttr = hasMemo ? `【詳細メモ】\n${ev.memo}` : ev.content;
+    html += `<div class="event-bar ${isTrans ? 'transparent-bg' : ''} ${isMultiBar ? 'multi-day-bar' : ''} ${selectedEventId === ev.id ? 'selected-event' : ''}" draggable="true" style="grid-column:${sIdx + 1} / span ${span}; grid-row:${baseRowOffset + laneIndex}; background:${isTrans ? 'transparent' : cat.bgColor}; color:${cat ? cat.textColor : '#000'}; ${fontStyles}" title="${escapeHtml(titleAttr)}" onclick="selectEventBar(event, '${ev.id}', '${deptId}', '${ev.startDate}')" ondblclick="event.stopPropagation(); openEventModalEdit('${ev.id}')" oncontextmenu="onEventContextMenu(event, '${ev.id}', '${deptId}', '${ev.startDate}')" ondragstart="onEventDragStart(event, '${ev.id}')">${escapeHtml(displayContent)}</div>`;
+  });
+  return html + `</div></div>`;
+}
+
+// ================= 選択・コピペ・削除・ドラッグ制御 =================
+function selectCell(e, deptId, dateStr) {
+  hideContextMenu();
+  selectedEventId = null;
+  selectedCell = { deptId, dateStr };
+  renderCalendar();
+}
+function selectEventBar(e, eventId, deptId, dateStr) {
+  e.stopPropagation();
+  hideContextMenu();
+  if ((window.innerWidth <= 768 || ('ontouchstart' in window)) && selectedEventId === eventId) {
+    openEventModalEdit(eventId);
+    return;
+  }
+  selectedEventId = eventId;
+  selectedCell = { deptId, dateStr };
+  renderCalendar();
+}
+function updateActionButtons() {
+  document.getElementById('btnCopy').disabled = !selectedEventId;
+  document.getElementById('btnCut').disabled = !selectedEventId;
+  document.getElementById('btnDeleteTop').disabled = !selectedEventId;
+  document.getElementById('btnPaste').disabled = !(clipboardEvent && selectedCell);
+  const st = document.getElementById('clipboardStatus');
+  if (clipboardEvent) {
+    st.style.display = 'inline-block';
+    st.textContent = `${isCutMode ? '切取中' : 'コピー中'}:${clipboardEvent.content.slice(0, 8)}`;
+  } else {
+    st.style.display = 'none';
+  }
+}
+function copySelectedEvent() {
+  if (!selectedEventId) return;
+  const ev = events.find(x => x.id === selectedEventId);
+  if (ev) { clipboardEvent = JSON.parse(JSON.stringify(ev)); isCutMode = false; updateActionButtons(); }
+}
+function cutSelectedEvent() {
+  if (!selectedEventId) return;
+  const ev = events.find(x => x.id === selectedEventId);
+  if (ev) { clipboardEvent = JSON.parse(JSON.stringify(ev)); isCutMode = true; updateActionButtons(); }
+}
+function pasteToSelectedCell() {
+  if (!clipboardEvent || !selectedCell) return;
+  const span = diffDays(clipboardEvent.startDate, clipboardEvent.endDate);
+  const newStart = selectedCell.dateStr, newEnd = formatDate(addDays(parseDate(newStart), Math.max(0, span)));
+  if (isCutMode) {
+    const idx = events.findIndex(x => x.id === clipboardEvent.id);
+    if (idx !== -1) {
+      events[idx].deptId = selectedCell.deptId;
+      events[idx].startDate = newStart;
+      events[idx].endDate = newEnd;
+      selectedEventId = events[idx].id;
+    }
+    clipboardEvent = null; isCutMode = false;
+  } else {
+    const newEv = {
+      ...clipboardEvent,
+      id: 'ev_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+      deptId: selectedCell.deptId,
+      startDate: newStart,
+      endDate: newEnd
+    };
+    events.push(newEv);
+    selectedEventId = newEv.id;
+  }
+  saveData();
+  renderCalendar();
+}
+function deleteSelectedEvent() {
+  if (!selectedEventId) return;
+  const ev = events.find(x => x.id === selectedEventId);
+  if (!ev || !confirm(`スケジュール「${ev.content}」を削除しますか？`)) return;
+  events = events.filter(x => x.id !== selectedEventId);
+  if (clipboardEvent && clipboardEvent.id === selectedEventId) clipboardEvent = null;
+  selectedEventId = null;
+  saveData();
+  renderCalendar();
+}
+function onEventDragStart(e, eventId) {
+  draggedEventId = eventId;
+  e.dataTransfer.setData('text/plain', eventId);
+}
+function onCellDragOver(e) { e.preventDefault(); e.currentTarget.classList.add('drag-over'); }
+function onCellDragLeave(e) { e.currentTarget.classList.remove('drag-over'); }
+function onCellDrop(e, targetDeptId, targetDateStr) {
+  e.preventDefault();
+  e.currentTarget.classList.remove('drag-over');
+  const evId = draggedEventId || e.dataTransfer.getData('text/plain');
+  const ev = events.find(x => x.id === evId);
+  if (!ev) return;
+  const span = diffDays(ev.startDate, ev.endDate);
+  ev.deptId = targetDeptId;
+  ev.startDate = targetDateStr;
+  ev.endDate = formatDate(addDays(parseDate(targetDateStr), Math.max(0, span)));
+  selectedEventId = ev.id;
+  selectedCell = { deptId: targetDeptId, dateStr: targetDateStr };
+  draggedEventId = null;
+  saveData();
+  renderCalendar();
+}
+function onEventContextMenu(e, eventId, deptId, dateStr) {
+  e.preventDefault(); e.stopPropagation();
+  selectedEventId = eventId; selectedCell = { deptId, dateStr };
+  renderCalendar(); showContextMenu(e.clientX, e.clientY, true);
+}
+function onCellContextMenu(e, deptId, dateStr) {
+  e.preventDefault();
+  selectedEventId = null; selectedCell = { deptId, dateStr };
+  renderCalendar(); showContextMenu(e.clientX, e.clientY, false);
+}
+function showContextMenu(x, y, isEvent) {
+  const menu = document.getElementById('contextMenu');
+  ['ctxEdit', 'ctxCopy', 'ctxCut', 'ctxDelete'].forEach(id => document.getElementById(id).classList.toggle('disabled', !isEvent));
+  document.getElementById('ctxPaste').classList.toggle('disabled', !clipboardEvent);
+  menu.classList.add('show');
+  menu.style.left = Math.min(x, window.innerWidth - 180) + 'px';
+  menu.style.top = Math.min(y, window.innerHeight - 190) + 'px';
+}
+function hideContextMenu() { document.getElementById('contextMenu').classList.remove('show'); }
+function ctxAction(act) {
+  hideContextMenu();
+  if (act === 'edit' && selectedEventId) openEventModalEdit(selectedEventId);
+  if (act === 'copy') copySelectedEvent();
+  if (act === 'cut') cutSelectedEvent();
+  if (act === 'paste') pasteToSelectedCell();
+  if (act === 'new' && selectedCell) openEventModalNew(selectedCell.deptId, selectedCell.dateStr);
+  if (act === 'delete') deleteSelectedEvent();
+}
+
+document.addEventListener('keydown', e => {
+  const isModal = document.getElementById('eventModal').classList.contains('show') ||
+                  document.getElementById('settingsModal').classList.contains('show') ||
+                  document.getElementById('importModal').classList.contains('show');
+  if (isModal) return;
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c' && selectedEventId) { e.preventDefault(); copySelectedEvent(); }
+  else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'x' && selectedEventId) { e.preventDefault(); cutSelectedEvent(); }
+  else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v' && clipboardEvent && selectedCell) { e.preventDefault(); pasteToSelectedCell(); }
+  else if (e.key === 'Delete' && selectedEventId) { e.preventDefault(); deleteSelectedEvent(); }
+});
+document.addEventListener('click', e => {
+  hideContextMenu();
+  const dd = document.getElementById('customCatDropdown');
+  if (dd && !dd.contains(e.target)) document.getElementById('customCatList').classList.remove('open');
+});
+
+// ================= 予定追加・編集モーダル制御 =================
+function populateSelectors() {
+  const monthSel = document.getElementById('monthDeptSelect');
+  const modalDeptSel = document.getElementById('evDeptId');
+  const impDeptSel = document.getElementById('importFallbackDept');
+  const curVal = monthSel.value;
+  monthSel.innerHTML = ''; modalDeptSel.innerHTML = ''; impDeptSel.innerHTML = '';
+  depts.forEach(d => {
+    const opt = `<option value="${d.id}">${escapeHtml(d.name)}</option>`;
+    monthSel.innerHTML += opt; modalDeptSel.innerHTML += opt; impDeptSel.innerHTML += opt;
+  });
+  if (curVal && depts.some(d => d.id === curVal)) monthSel.value = curVal;
+
+  let timeHtml = '';
+  for (let h = 0; h < 24; h++) for (let m of ['00', '30']) timeHtml += `<option value="${String(h).padStart(2, '0')}:${m}"></option>`;
+  document.getElementById('timeOptionsList').innerHTML = timeHtml;
+
+  let catHtml = '';
+  categories.forEach(c => {
+    catHtml += `<div class="custom-cat-option" style="background:${c.bgColor === 'transparent' ? '#fff' : c.bgColor}; color:${c.textColor};" onclick="selectCustomCategory('${c.id}')">${escapeHtml(c.name)}</div>`;
+  });
+  document.getElementById('customCatList').innerHTML = catHtml;
+}
+function toggleCustomCatList(e) { e.stopPropagation(); document.getElementById('customCatList').classList.toggle('open'); }
+function selectCustomCategory(catId) {
+  const cat = categories.find(c => c.id === catId) || categories[0];
+  document.getElementById('evCategory').value = cat.id;
+  const sel = document.getElementById('customCatSelected');
+  sel.textContent = cat.name;
+  sel.style.backgroundColor = cat.bgColor === 'transparent' ? '#fff' : cat.bgColor;
+  sel.style.color = cat.textColor;
+  document.getElementById('customCatList').classList.remove('open');
+}
+function enforceContentLimit(el) {
+  if (el.value.length > 35) el.value = el.value.slice(0, 35);
+  document.getElementById('evCharCount').textContent = `${el.value.length} / 35文字`;
+}
+function onTargetTypeChange() {
+  document.getElementById('evDeptId').disabled = (document.getElementById('evTargetType').value === 'all');
+}
+function onMultiDayChange() {
+  const isM = document.getElementById('evIsMultiDay').checked;
+  document.getElementById('evEndDate').disabled = !isM;
+  if (!isM) document.getElementById('evEndDate').value = document.getElementById('evStartDate').value;
+}
+function onStartDateChange() {
+  const sVal = document.getElementById('evStartDate').value;
+  const eInput = document.getElementById('evEndDate');
+  if (!document.getElementById('evIsMultiDay').checked || eInput.value < sVal) eInput.value = sVal;
+}
+function openEventModalNew(deptId = null, dateStr = null) {
+  document.getElementById('eventModalTitle').textContent = 'スケジュールの追加';
+  document.getElementById('evId').value = '';
+  document.getElementById('evTargetType').value = 'dept';
+  document.getElementById('evDeptId').disabled = false;
+  document.getElementById('evDeptId').value = deptId || (selectedCell && selectedCell.deptId) || depts[0].id;
+  const dStr = dateStr || (selectedCell && selectedCell.dateStr) || formatDate(baseDate);
+  document.getElementById('evStartDate').value = dStr;
+  document.getElementById('evEndDate').value = dStr;
+  document.getElementById('evEndDate').disabled = true;
+  document.getElementById('evIsMultiDay').checked = false;
+  document.getElementById('evStartTime').value = '';
+  document.getElementById('evEndTime').value = '';
+  document.getElementById('evContent').value = '';
+  enforceContentLimit(document.getElementById('evContent'));
+  selectCustomCategory(categories[0].id);
+  ['evBold', 'evItalic', 'evUnderline', 'evStrike'].forEach(id => document.getElementById(id).checked = false);
+  document.getElementById('evMemo').value = '';
+  document.getElementById('btnDeleteEvent').style.display = 'none';
+  document.getElementById('eventModal').classList.add('show');
+  setTimeout(() => document.getElementById('evContent').focus(), 50);
+}
+function openEventModalEdit(eventId) {
+  const ev = events.find(e => e.id === eventId); if (!ev) return;
+  document.getElementById('eventModalTitle').textContent = 'スケジュールの編集';
+  document.getElementById('evId').value = ev.id;
+  document.getElementById('evTargetType').value = 'dept';
+  document.getElementById('evDeptId').disabled = false;
+  document.getElementById('evDeptId').value = ev.deptId;
+  document.getElementById('evStartDate').value = ev.startDate;
+  document.getElementById('evEndDate').value = ev.endDate;
+  const isM = ev.isMultiDay || (ev.startDate !== ev.endDate);
+  document.getElementById('evIsMultiDay').checked = isM;
+  document.getElementById('evEndDate').disabled = !isM;
+  document.getElementById('evStartTime').value = ev.startTime || '';
+  document.getElementById('evEndTime').value = ev.endTime || '';
+  document.getElementById('evContent').value = ev.content;
+  enforceContentLimit(document.getElementById('evContent'));
+  selectCustomCategory(categories.some(c => c.id === ev.categoryId) ? ev.categoryId : categories[0].id);
+  document.getElementById('evBold').checked = !!ev.bold;
+  document.getElementById('evItalic').checked = !!ev.italic;
+  document.getElementById('evUnderline').checked = !!ev.underline;
+  document.getElementById('evStrike').checked = !!ev.strike;
+  document.getElementById('evMemo').value = ev.memo || '';
+  document.getElementById('btnDeleteEvent').style.display = 'inline-block';
+  document.getElementById('eventModal').classList.add('show');
+}
+function closeEventModal() { document.getElementById('eventModal').classList.remove('show'); }
+function saveEvent() {
+  let content = toHalfWidthAll(document.getElementById('evContent').value.trim()).slice(0, 35);
+  if (!content) { alert('「内容」を入力してください。'); return; }
+  const id = document.getElementById('evId').value;
+  const targetType = document.getElementById('evTargetType').value;
+  const deptId = document.getElementById('evDeptId').value;
+  const startDate = document.getElementById('evStartDate').value;
+  const isMultiDay = document.getElementById('evIsMultiDay').checked;
+  let endDate = isMultiDay ? document.getElementById('evEndDate').value : startDate;
+  if (endDate < startDate) endDate = startDate;
+  const commonData = {
+    startDate, endDate,
+    startTime: toHalfWidthAll(document.getElementById('evStartTime').value.trim()),
+    endTime: toHalfWidthAll(document.getElementById('evEndTime').value.trim()),
+    isMultiDay, content, categoryId: document.getElementById('evCategory').value,
+    bold: document.getElementById('evBold').checked, italic: document.getElementById('evItalic').checked,
+    underline: document.getElementById('evUnderline').checked, strike: document.getElementById('evStrike').checked,
+    memo: document.getElementById('evMemo').value
+  };
+  if (targetType === 'all') {
+    if (id) events = events.filter(e => e.id !== id);
+    depts.forEach(d => events.push({ id: 'ev_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6), deptId: d.id, ...commonData }));
+  } else {
+    if (id) { const idx = events.findIndex(e => e.id === id); if (idx !== -1) events[idx] = { id, deptId, ...commonData }; }
+    else events.push({ id: 'ev_' + Date.now(), deptId, ...commonData });
+  }
+  saveData(); closeEventModal(); renderCalendar();
+}
+function deleteEventFromModal() {
+  const id = document.getElementById('evId').value;
+  const ev = events.find(x => x.id === id);
+  if (!ev || !confirm(`スケジュール「${ev.content}」を削除しますか？`)) return;
+  events = events.filter(e => e.id !== id);
+  if (selectedEventId === id) selectedEventId = null;
+  saveData(); closeEventModal(); renderCalendar();
+}
+
+// ================= 設定モーダル制御 =================
+function openSettingsModal() { renderSettingsLists(); document.getElementById('settingsModal').classList.add('show'); }
+function closeSettingsModal() { document.getElementById('settingsModal').classList.remove('show'); populateSelectors(); renderCalendar(); }
+function renderSettingsLists() {
+  let dHtml = '';
+  depts.forEach((d, idx) => {
+    dHtml += `<div class="settings-item"><input type="text" value="${escapeHtml(d.name)}" style="flex:1; padding:2px;" onchange="renameDept('${d.id}', this.value)"><button class="btn" onclick="moveDept(${idx}, -1)" ${idx === 0 ? 'disabled' : ''}>↑</button><button class="btn" onclick="moveDept(${idx}, 1)" ${idx === depts.length - 1 ? 'disabled' : ''}>↓</button><button class="btn" style="color:#c00;" onclick="removeDept('${d.id}')">削除</button></div>`;
+  });
+  document.getElementById('settingsDeptList').innerHTML = dHtml;
+  let cHtml = '';
+  categories.forEach(c => {
+    cHtml += `<div class="settings-item"><span style="background:${c.bgColor === 'transparent' ? '#fff' : c.bgColor}; color:${c.textColor}; border:1px solid #999; padding:2px 8px; min-width:140px;">${escapeHtml(c.name)}</span><button class="btn" style="color:#c00;" onclick="removeCategory('${c.id}')">削除</button></div>`;
+  });
+  document.getElementById('settingsCatList').innerHTML = cHtml;
+}
+function addDept() {
+  const el = document.getElementById('newDeptName');
+  if (!el.value.trim()) return;
+  depts.push({ id: 'd_' + Date.now(), name: el.value.trim() });
+  el.value = ''; saveData(); renderSettingsLists();
+}
+function renameDept(id, name) {
+  const d = depts.find(x => x.id === id);
+  if (d && name.trim()) { d.name = name.trim(); saveData(); }
+}
+function moveDept(idx, dir) {
+  const t = idx + dir;
+  if (t < 0 || t >= depts.length) return;
+  [depts[idx], depts[t]] = [depts[t], depts[idx]];
+  saveData(); renderSettingsLists();
+}
+function removeDept(id) {
+  if (depts.length <= 1 || !confirm('この部署を削除しますか？')) return;
+  depts = depts.filter(d => d.id !== id);
+  saveData(); renderSettingsLists();
+}
+function addCategory() {
+  const el = document.getElementById('newCatName');
+  if (!el.value.trim()) return;
+  categories.push({
+    id: 'c_' + Date.now(),
+    name: el.value.trim(),
+    textColor: document.getElementById('newCatText').value,
+    bgColor: document.getElementById('newCatTrans').checked ? 'transparent' : document.getElementById('newCatBg').value
+  });
+  el.value = ''; saveData(); renderSettingsLists();
+}
+function removeCategory(id) {
+  if (categories.length <= 1) return;
+  categories = categories.filter(c => c.id !== id);
+  saveData(); renderSettingsLists();
+}
+function escapeHtml(str) {
+  return String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+window.onload = () => {
+  loadData();
+  populateSelectors();
+  renderCalendar();
+  checkLoginOnStart();
+};
+</script>
+</body>
+</html>
