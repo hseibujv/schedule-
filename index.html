@@ -450,7 +450,7 @@
         </div>
       </div>
       <div class="settings-section">
-        <div style="font-weight:bold; margin-bottom:4px;">🔒 ログインパスワード変更（※要管理者PW / 初期値: admin）</div>
+        <div style="font-weight:bold; margin-bottom:4px;">🔒 ログインパスワード変更（※要管理者パスワード）</div>
         <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
           <input type="password" id="adminAuthPw" placeholder="管理者PW" style="width:110px; padding:3px;">
           <input type="text" id="newUserPw" placeholder="新しいログインPW" style="flex:1; padding:3px;">
@@ -614,7 +614,7 @@ function callCloudSave(payload, onSuccess, onError) {
 }
 
 // ================= ログイン・パスワード制御 =================
-function getUserPassword() { return localStorage.getItem('gw_user_pw') || 'seibujv'; }
+function getUserPassword() { return localStorage.getItem('gw_user_pw') || '1234'; }
 function getAdminPassword() { return localStorage.getItem('gw_admin_pw') || 'admin'; }
 function checkLoginOnStart() {
   if (localStorage.getItem('gw_auto_login') === 'true') {
