@@ -545,7 +545,7 @@ const HOLIDAYS = {
 
 const DATA_VERSION = 'v1.6_cloud';
 let viewMode = 7;
-let baseDate = new Date(2026, 10, 19);
+let baseDate = new Date();
 let depts = [], categories = [], events = [];
 let selectedEventId = null, selectedCell = null, clipboardEvent = null, isCutMode = false, draggedEventId = null;
 
@@ -738,7 +738,7 @@ function resetSampleData() {
   depts = JSON.parse(JSON.stringify(DEFAULT_DEPTS));
   categories = JSON.parse(JSON.stringify(DEFAULT_CATEGORIES));
   events = JSON.parse(JSON.stringify(DEFAULT_EVENTS));
-  baseDate = new Date(2026, 10, 19);
+  baseDate = new Date();
   selectedEventId = null; selectedCell = null; clipboardEvent = null;
   saveData(); populateSelectors(); renderSettingsLists(); renderCalendar();
 }
@@ -1125,7 +1125,7 @@ function changeViewMode(mode) {
 }
 
 function navigatePeriod(dir) {
-  if (dir === 0) baseDate = new Date(2026, 10, 19);
+  if (dir === 0) baseDate = new Date();
   else if (viewMode === 1) baseDate = addDays(baseDate, dir);
   else if (viewMode === 7) baseDate = addDays(baseDate, dir * 7);
   else baseDate = new Date(baseDate.getFullYear(), baseDate.getMonth() + dir, 1);
