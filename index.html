@@ -1587,42 +1587,119 @@ function deleteEventFromModal() {
   saveData(); closeEventModal(); renderCalendar();
 }
 
-// ================= 設定モーダル制御 =================
-function openSettingsModal() { renderSettingsLists(); document.getElementById('settingsModal').classList.add('show'); }
-function closeSettingsModal() { document.getElementById('settingsModal').classList.remove('show'); populateSelectors(); renderCalendar(); }
+// ================= 設定モーダル制御（編集ボタン＋確認OK確定方式） =================
+let editingDeptId = null;
+let editingCatId = null;
+
+function openSettingsModal() {
+  editingDeptId = null;
+  editingCatId = null;
+  renderSettingsLists();
+  document.getElementById('settingsModal').classList.add('show');
+}
+function closeSettingsModal() {
+  editingDeptId = null;
+  editingCatId = null;
+  document.getElementById('settingsModal').classList.remove('show');
+  populateSelectors();
+  renderCalendar();
+}
+
 function renderSettingsLists() {
+  // 1. 部署リストの描画（表示行 ＋ ↑ ↓ 編集 削除）
   let dHtml = '';
   depts.forEach((d, idx) => {
-    dHtml += `<div class="settings-item"><input type="text" value="${escapeHtml(d.name)}" style="flex:1; padding:2px;" onchange="renameDept('${d.id}', this.value)"><button class="btn" onclick="moveDept(${idx}, -1)" ${idx === 0 ? 'disabled' : ''}>↑</button><button class="btn" onclick="moveDept(${idx}, 1)" ${idx === depts.length - 1 ? 'disabled' : ''}>↓</button><button class="btn" style="color:#c00;" onclick="removeDept('${d.id}')">削除</button></div>`;
+    if (editingDeptId === d.id) {
+      dHtml += `<div class="settings-item" style="background:#eef4ff;">
+        <input type="text" id="editDeptInput_${d.id}" value="${escapeHtml(d.name)}" style="flex:1; padding:3px;">
+        <button class="btn" style="background:#2b579a; color:#fff; font-weight:bold;" onclick="confirmSaveDept('${d.id}')">保存</button>
+        <button class="btn" onclick="cancelEditDept()">キャンセル</button>
+      </div>`;
+    } else {
+      dHtml += `<div class="settings-item">
+        <span style="flex:1; padding:2px 4px; font-weight:bold;">${escapeHtml(d.name)}</span>
+        <button class="btn" onclick="moveDept(${idx}, -1)" ${idx === 0 ? 'disabled' : ''}>↑</button>
+        <button class="btn" onclick="moveDept(${idx}, 1)" ${idx === depts.length - 1 ? 'disabled' : ''}>↓</button>
+        <button class="btn" onclick="startEditDept('${d.id}')">編集</button>
+        <button class="btn" style="color:#c00;" onclick="removeDept('${d.id}')">削除</button>
+      </div>`;
+    }
   });
   document.getElementById('settingsDeptList').innerHTML = dHtml;
+
+  // 2. 分類リストの描画（色見本表示行 ＋ 編集 削除 ※↑↓ボタンなし）
   let cHtml = '';
   categories.forEach(c => {
-    cHtml += `<div class="settings-item"><span style="background:${c.bgColor === 'transparent' ? '#fff' : c.bgColor}; color:${c.textColor}; border:1px solid #999; padding:2px 8px; min-width:140px;">${escapeHtml(c.name)}</span><button class="btn" style="color:#c00;" onclick="removeCategory('${c.id}')">削除</button></div>`;
+    const isTrans = (c.bgColor === 'transparent');
+    const bgPreview = isTrans ? '#ffffff' : c.bgColor;
+    const bgPickerVal = isTrans ? '#ffff99' : c.bgColor;
+    if (editingCatId === c.id) {
+      cHtml += `<div class="settings-item" style="background:#eef4ff; flex-wrap:wrap;">
+        <input type="text" id="editCatName_${c.id}" value="${escapeHtml(c.name)}" style="flex:1; min-width:110px; padding:3px;">
+        <label style="font-size:11px; display:flex; align-items:center; gap:2px;">文字<input type="color" id="editCatText_${c.id}" value="${c.textColor}" style="width:26px; height:24px; padding:0; cursor:pointer;"></label>
+        <label style="font-size:11px; display:flex; align-items:center; gap:2px;">背景<input type="color" id="editCatBg_${c.id}" value="${bgPickerVal}" ${isTrans ? 'disabled' : ''} style="width:26px; height:24px; padding:0; cursor:pointer;"></label>
+        <label style="font-size:11px; display:flex; align-items:center; cursor:pointer;"><input type="checkbox" id="editCatTrans_${c.id}" ${isTrans ? 'checked' : ''} onchange="document.getElementById('editCatBg_${c.id}').disabled = this.checked;">背景なし</label>
+        <button class="btn" style="background:#2b579a; color:#fff; font-weight:bold;" onclick="confirmSaveCategory('${c.id}')">保存</button>
+        <button class="btn" onclick="cancelEditCategory()">キャンセル</button>
+      </div>`;
+    } else {
+      cHtml += `<div class="settings-item">
+        <span style="background:${bgPreview}; color:${c.textColor}; border:1px solid #999; padding:2px 8px; min-width:150px; flex:1;">${escapeHtml(c.name)}</span>
+        <button class="btn" onclick="startEditCategory('${c.id}')">編集</button>
+        <button class="btn" style="color:#c00;" onclick="removeCategory('${c.id}')">削除</button>
+      </div>`;
+    }
   });
   document.getElementById('settingsCatList').innerHTML = cHtml;
 }
+
+// 部署の追加・編集・移動・削除
 function addDept() {
   const el = document.getElementById('newDeptName');
   if (!el.value.trim()) return;
   depts.push({ id: 'd_' + Date.now(), name: el.value.trim() });
-  el.value = ''; saveData(); renderSettingsLists();
+  el.value = '';
+  saveData();
+  renderSettingsLists();
 }
-function renameDept(id, name) {
+function startEditDept(id) {
+  editingDeptId = id;
+  renderSettingsLists();
+  const inp = document.getElementById('editDeptInput_' + id);
+  if (inp) inp.focus();
+}
+function cancelEditDept() {
+  editingDeptId = null;
+  renderSettingsLists();
+}
+function confirmSaveDept(id) {
+  const inp = document.getElementById('editDeptInput_' + id);
+  if (!inp) return;
+  const newName = inp.value.trim();
+  if (!newName) { alert('部署名を入力してください。'); return; }
   const d = depts.find(x => x.id === id);
-  if (d && name.trim()) { d.name = name.trim(); saveData(); }
+  if (!d) return;
+  if (!confirm(`部署名を「${d.name}」から「${newName}」に変更しますか？`)) return;
+  d.name = newName;
+  editingDeptId = null;
+  saveData();
+  renderSettingsLists();
 }
 function moveDept(idx, dir) {
   const t = idx + dir;
   if (t < 0 || t >= depts.length) return;
   [depts[idx], depts[t]] = [depts[t], depts[idx]];
-  saveData(); renderSettingsLists();
+  saveData();
+  renderSettingsLists();
 }
 function removeDept(id) {
   if (depts.length <= 1 || !confirm('この部署を削除しますか？')) return;
   depts = depts.filter(d => d.id !== id);
-  saveData(); renderSettingsLists();
+  saveData();
+  renderSettingsLists();
 }
+
+// 分類の追加・編集・削除
 function addCategory() {
   const el = document.getElementById('newCatName');
   if (!el.value.trim()) return;
@@ -1632,13 +1709,45 @@ function addCategory() {
     textColor: document.getElementById('newCatText').value,
     bgColor: document.getElementById('newCatTrans').checked ? 'transparent' : document.getElementById('newCatBg').value
   });
-  el.value = ''; saveData(); renderSettingsLists();
+  el.value = '';
+  saveData();
+  renderSettingsLists();
+}
+function startEditCategory(id) {
+  editingCatId = id;
+  renderSettingsLists();
+  const inp = document.getElementById('editCatName_' + id);
+  if (inp) inp.focus();
+}
+function cancelEditCategory() {
+  editingCatId = null;
+  renderSettingsLists();
+}
+function confirmSaveCategory(id) {
+  const nameEl = document.getElementById('editCatName_' + id);
+  const textEl = document.getElementById('editCatText_' + id);
+  const bgEl = document.getElementById('editCatBg_' + id);
+  const transEl = document.getElementById('editCatTrans_' + id);
+  if (!nameEl) return;
+  const newName = nameEl.value.trim();
+  if (!newName) { alert('分類名を入力してください。'); return; }
+  const c = categories.find(x => x.id === id);
+  if (!c) return;
+  if (!confirm(`分類「${c.name}」の設定を「${newName}」の内容で更新しますか？`)) return;
+  c.name = newName;
+  c.textColor = textEl.value;
+  c.bgColor = transEl.checked ? 'transparent' : bgEl.value;
+  editingCatId = null;
+  saveData();
+  renderSettingsLists();
 }
 function removeCategory(id) {
-  if (categories.length <= 1) return;
+  if (categories.length <= 1 || !confirm('この分類を削除しますか？')) return;
   categories = categories.filter(c => c.id !== id);
-  saveData(); renderSettingsLists();
+  saveData();
+  renderSettingsLists();
 }
+
 function escapeHtml(str) {
   return String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
