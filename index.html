@@ -458,7 +458,6 @@
         </div>
       </div>
       <div style="display:flex; justify-content:space-between; align-items:center;">
-        <button class="btn" onclick="resetSampleData()" style="font-size:11px;">初期サンプルデータに戻す(要管理者PW)</button>
         <button class="btn" style="min-width:90px; font-weight:bold;" onclick="closeSettingsModal()">閉じる</button>
       </div>
     </div>
@@ -527,13 +526,7 @@ const DEFAULT_CATEGORIES = [
   { id: 'c26', name: '免許資格試験',   textColor: '#ffff00', bgColor: '#800000' }
 ];
 
-const DEFAULT_EVENTS = [
-  { id: 'e1', deptId: 'd1', startDate: '2026-11-16', endDate: '2026-11-21', startTime: '', endTime: '', isMultiDay: true, content: '太陽光発電設備導入事業(中電工)', categoryId: 'c21', bold: false, italic: false, underline: false, strike: false, memo: '' },
-  { id: 'e2', deptId: 'd1', startDate: '2026-11-16', endDate: '2026-11-20', startTime: '', endTime: '', isMultiDay: true, content: '沈砂池機械設備工事', categoryId: 'c21', bold: false, italic: false, underline: false, strike: false, memo: '中尾インフラクリエイト' },
-  { id: 'e3', deptId: 'd1', startDate: '2026-11-17', endDate: '2026-11-17', startTime: '13:30', endTime: '', isMultiDay: false, content: '現場生成AI研修(Web)', categoryId: 'c7', bold: false, italic: false, underline: false, strike: false, memo: '' },
-  { id: 'e4', deptId: 'd1', startDate: '2026-11-19', endDate: '2026-11-19', startTime: '', endTime: '', isMultiDay: false, content: '沈砂池 ﾎﾟﾝﾌﾟ棟', categoryId: 'c11', bold: false, italic: false, underline: false, strike: false, memo: '油面計、分配井' },
-  { id: 'e5', deptId: 'd1', startDate: '2026-11-20', endDate: '2026-11-20', startTime: '13:00', endTime: '14:30', isMultiDay: false, content: '東西送水停止(ﾒﾝﾃの為)', categoryId: 'c13', bold: false, italic: false, underline: false, strike: false, memo: '電磁流量計メンテ' }
-];
+const DEFAULT_EVENTS = [];
 
 // 日本の祝日・振替休日・国民の休日を1990年〜2060年まで自動生成する関数
 const HOLIDAYS = (function() {
