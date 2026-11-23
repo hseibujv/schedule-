@@ -1587,17 +1587,178 @@ function deleteEventFromModal() {
   saveData(); closeEventModal(); renderCalendar();
 }
 
-// ================= 設定モーダル制御（編集ボタン＋確認OK確定方式） =================
+// ================= 設定モーダル制御（Excel風カラーパレット＋確認OK確定方式） =================
 let editingDeptId = null;
 let editingCatId = null;
+let activeColorTarget = null;
+let recentColors = JSON.parse(localStorage.getItem('gw_recent_colors') || '["#0000ff","#99ff99","#ffff99"]');
+
+// Excel風「テーマの色」（10列 × 6行）
+const EXCEL_THEME_MAIN = ['#ffffff','#000000','#e7e6e6','#44546a','#5b9bd5','#ed7d31','#a5a5a5','#ffc000','#4472c4','#70ad47'];
+const EXCEL_THEME_SHADES = [
+  ['#f2f2f2','#7f7f7f','#d0cece','#d6dce4','#deeaf6','#fbe5d5','#ededed','#fff2cc','#d9e2f3','#e2efd9'],
+  ['#d8d8d8','#595959','#aeaaaa','#adb9ca','#bdd7ee','#f7cbac','#dbdbdb','#ffe599','#b4c6e7','#c5e0b3'],
+  ['#bfbfbf','#3f3f3f','#757070','#8496b0','#9cc3e5','#f4b183','#c9c9c9','#ffd966','#8eaadb','#a8d08d'],
+  ['#a5a5a5','#262626','#3a3838','#323f4f','#2e75b5','#c55a11','#7b7b7b','#bf9000','#2f5496','#538135'],
+  ['#7f7f7f','#0c0c0c','#171616','#222a35','#1e4e79','#833c0b','#525252','#7f6000','#1f3864','#375623']
+];
+// Excel風「標準の色」＋GroupWatcher定番色（10列 × 2行）
+const EXCEL_STANDARD_COLORS = [
+  '#c00000','#ff0000','#ffc000','#ffff00','#92d050','#00b050','#00b0f0','#0070c0','#002060','#7030a0',
+  '#800000','#ff99ff','#ff8080','#ffff99','#99ff99','#80ffff','#00ffff','#3366ff','#8000ff','#993366'
+];
+
+function ensureExcelColorPalette() {
+  if (!document.getElementById('excelPaletteStyle')) {
+    const st = document.createElement('style');
+    st.id = 'excelPaletteStyle';
+    st.textContent = `
+      .color-swatch-btn { display:inline-flex; align-items:center; gap:5px; padding:2px 7px; border:1px solid #888; background:#fff; cursor:pointer; border-radius:2px; font-size:12px; }
+      .color-swatch-btn:hover { background:#e8f0fe; border-color:#3b5998; }
+      .color-swatch-box { width:16px; height:16px; border:1px solid #555; display:inline-block; position:relative; }
+      .color-swatch-box.is-trans { background:#fff !important; }
+      .color-swatch-box.is-trans::after { content:""; position:absolute; top:7px; left:-1px; width:16px; height:2px; background:#d00; transform:rotate(-45deg); }
+      .excel-palette-popup { display:none; position:fixed; background:#fff; border:1px solid #888; box-shadow:0 4px 16px rgba(0,0,0,0.35); padding:10px; z-index:400; width:246px; user-select:none; border-radius:3px; }
+      .excel-palette-popup.show { display:block; }
+      .ep-title { font-size:11.5px; font-weight:bold; color:#333; margin:6px 0 4px 0; }
+      .ep-title:first-child { margin-top:0; }
+      .ep-grid { display:grid; grid-template-columns:repeat(10, 1fr); gap:3px; }
+      .ep-cell { width:19px; height:19px; border:1px solid #ccc; cursor:pointer; box-sizing:border-box; }
+      .ep-cell:hover { outline:2px solid #ff6600; border-color:#fff; z-index:2; transform:scale(1.12); }
+      .ep-divider { height:1px; background:#ddd; margin:7px 0; }
+      .ep-action-row { padding:5px 6px; font-size:12px; cursor:pointer; display:flex; align-items:center; gap:6px; border-radius:2px; color:#222; }
+      .ep-action-row:hover { background:#e8f0fe; }
+    `;
+    document.head.appendChild(st);
+  }
+  if (!document.getElementById('excelColorPopup')) {
+    const pop = document.createElement('div');
+    pop.id = 'excelColorPopup';
+    pop.className = 'excel-palette-popup';
+    pop.onclick = e => e.stopPropagation();
+    document.body.appendChild(pop);
+    document.addEventListener('click', () => closeExcelPalette());
+  }
+  // 設定画面の新規追加欄にある標準カラーピッカーも自動的にExcelパレットボタンに変換
+  const addTextInp = document.getElementById('newCatText');
+  if (addTextInp && addTextInp.style.display !== 'none') {
+    addTextInp.style.display = 'none';
+    const btnT = document.createElement('button');
+    btnT.type = 'button'; btnT.id = 'newCatTextBtn'; btnT.className = 'color-swatch-btn';
+    btnT.innerHTML = `<span class="color-swatch-box" id="newCatTextBox" style="background:${addTextInp.value};"></span><span>▼</span>`;
+    btnT.onclick = e => openExcelPalette(e, 'newText');
+    addTextInp.parentNode.insertBefore(btnT, addTextInp);
+
+    const addBgInp = document.getElementById('newCatBg');
+    const addTransChk = document.getElementById('newCatTrans');
+    if (addBgInp) {
+      addBgInp.style.display = 'none';
+      if (addTransChk && addTransChk.parentNode) addTransChk.parentNode.style.display = 'none';
+      const btnB = document.createElement('button');
+      btnB.type = 'button'; btnB.id = 'newCatBgBtn'; btnB.className = 'color-swatch-btn';
+      btnB.innerHTML = `<span class="color-swatch-box" id="newCatBgBox" style="background:${addBgInp.value};"></span><span id="newCatBgLabel">▼</span>`;
+      btnB.onclick = e => openExcelPalette(e, 'newBg');
+      addBgInp.parentNode.insertBefore(btnB, addBgInp);
+    }
+  }
+}
+
+function buildExcelPaletteHtml(allowTransparent) {
+  let html = `<div class="ep-title">テーマの色</div><div class="ep-grid" style="margin-bottom:5px;">`;
+  EXCEL_THEME_MAIN.forEach(c => { html += `<div class="ep-cell" style="background:${c};" onclick="pickExcelColor('${c}')"></div>`; });
+  html += `</div><div class="ep-grid" style="row-gap:1px;">`;
+  EXCEL_THEME_SHADES.forEach(row => {
+    row.forEach(c => { html += `<div class="ep-cell" style="background:${c};" onclick="pickExcelColor('${c}')"></div>`; });
+  });
+  html += `</div><div class="ep-divider"></div><div class="ep-title">標準の色</div><div class="ep-grid">`;
+  EXCEL_STANDARD_COLORS.forEach(c => { html += `<div class="ep-cell" style="background:${c};" onclick="pickExcelColor('${c}')"></div>`; });
+  html += `</div><div class="ep-divider"></div><div class="ep-title">最近使用した色</div><div class="ep-grid">`;
+  recentColors.slice(0, 10).forEach(c => { html += `<div class="ep-cell" style="background:${c};" onclick="pickExcelColor('${c}')"></div>`; });
+  html += `</div><div class="ep-divider"></div>`;
+  if (allowTransparent) {
+    html += `<div class="ep-action-row" onclick="pickExcelColor('transparent')"><span class="color-swatch-box is-trans"></span><span>塗りつぶしなし(N)</span></div>`;
+  }
+  html += `<div class="ep-action-row" onclick="document.getElementById('epCustomColorInput').click()"><span style="font-size:15px;">🎨</span><span>その他の色(M)...</span><input type="color" id="epCustomColorInput" style="visibility:hidden; width:0; height:0; padding:0; border:none;" onchange="pickExcelColor(this.value)"></div>`;
+  return html;
+}
+
+function openExcelPalette(e, targetKey) {
+  e.stopPropagation();
+  ensureExcelColorPalette();
+  activeColorTarget = targetKey;
+  const allowTrans = (targetKey === 'newBg' || targetKey.indexOf('editBg_') === 0);
+  const pop = document.getElementById('excelColorPopup');
+  pop.innerHTML = buildExcelPaletteHtml(allowTrans);
+  pop.classList.add('show');
+  const rect = e.currentTarget.getBoundingClientRect();
+  const leftPos = Math.min(rect.left, window.innerWidth - 256);
+  const topPos = (rect.bottom + 320 > window.innerHeight) ? Math.max(8, rect.top - 310) : (rect.bottom + 4);
+  pop.style.left = leftPos + 'px';
+  pop.style.top = topPos + 'px';
+}
+
+function closeExcelPalette() {
+  const pop = document.getElementById('excelColorPopup');
+  if (pop) pop.classList.remove('show');
+  activeColorTarget = null;
+}
+
+function pickExcelColor(colorVal) {
+  if (!activeColorTarget) return;
+  if (colorVal !== 'transparent') {
+    recentColors = [colorVal, ...recentColors.filter(c => c.toLowerCase() !== colorVal.toLowerCase())].slice(0, 10);
+    localStorage.setItem('gw_recent_colors', JSON.stringify(recentColors));
+  }
+  if (activeColorTarget === 'newText') {
+    document.getElementById('newCatText').value = colorVal;
+    document.getElementById('newCatTextBox').style.background = colorVal;
+  } else if (activeColorTarget === 'newBg') {
+    const isT = (colorVal === 'transparent');
+    document.getElementById('newCatTrans').checked = isT;
+    if (!isT) document.getElementById('newCatBg').value = colorVal;
+    const box = document.getElementById('newCatBgBox');
+    box.classList.toggle('is-trans', isT);
+    box.style.background = isT ? '#ffffff' : colorVal;
+    document.getElementById('newCatBgLabel').textContent = isT ? '透明 ▼' : '▼';
+  } else if (activeColorTarget.indexOf('editText_') === 0) {
+    const cid = activeColorTarget.replace('editText_', '');
+    document.getElementById('editCatText_' + cid).value = colorVal;
+    document.getElementById('editCatTextBox_' + cid).style.background = colorVal;
+    updateEditCatPreview(cid);
+  } else if (activeColorTarget.indexOf('editBg_') === 0) {
+    const cid = activeColorTarget.replace('editBg_', '');
+    const isT = (colorVal === 'transparent');
+    document.getElementById('editCatTrans_' + cid).value = isT ? '1' : '0';
+    if (!isT) document.getElementById('editCatBg_' + cid).value = colorVal;
+    const box = document.getElementById('editCatBgBox_' + cid);
+    box.classList.toggle('is-trans', isT);
+    box.style.background = isT ? '#ffffff' : colorVal;
+    document.getElementById('editCatBgLabel_' + cid).textContent = isT ? '透明 ▼' : '▼';
+    updateEditCatPreview(cid);
+  }
+  closeExcelPalette();
+}
+
+function updateEditCatPreview(cid) {
+  const nameEl = document.getElementById('editCatName_' + cid);
+  const textEl = document.getElementById('editCatText_' + cid);
+  const bgEl = document.getElementById('editCatBg_' + cid);
+  const transEl = document.getElementById('editCatTrans_' + cid);
+  if (!nameEl) return;
+  const isT = (transEl.value === '1');
+  nameEl.style.color = textEl.value;
+  nameEl.style.background = isT ? '#ffffff' : bgEl.value;
+}
 
 function openSettingsModal() {
+  ensureExcelColorPalette();
   editingDeptId = null;
   editingCatId = null;
   renderSettingsLists();
   document.getElementById('settingsModal').classList.add('show');
 }
 function closeSettingsModal() {
+  closeExcelPalette();
   editingDeptId = null;
   editingCatId = null;
   document.getElementById('settingsModal').classList.remove('show');
@@ -1606,7 +1767,7 @@ function closeSettingsModal() {
 }
 
 function renderSettingsLists() {
-  // 1. 部署リストの描画（表示行 ＋ ↑ ↓ 編集 削除）
+  // 1. 部署リスト（表示行 ＋ ↑ ↓ 編集 削除）
   let dHtml = '';
   depts.forEach((d, idx) => {
     if (editingDeptId === d.id) {
@@ -1627,18 +1788,20 @@ function renderSettingsLists() {
   });
   document.getElementById('settingsDeptList').innerHTML = dHtml;
 
-  // 2. 分類リストの描画（色見本表示行 ＋ 編集 削除 ※↑↓ボタンなし）
+  // 2. 分類リスト（色見本表示行 ＋ 編集 削除 ※↑↓なし・Excelパレット対応）
   let cHtml = '';
   categories.forEach(c => {
     const isTrans = (c.bgColor === 'transparent');
     const bgPreview = isTrans ? '#ffffff' : c.bgColor;
-    const bgPickerVal = isTrans ? '#ffff99' : c.bgColor;
+    const bgInitVal = isTrans ? '#ffff99' : c.bgColor;
     if (editingCatId === c.id) {
       cHtml += `<div class="settings-item" style="background:#eef4ff; flex-wrap:wrap;">
-        <input type="text" id="editCatName_${c.id}" value="${escapeHtml(c.name)}" style="flex:1; min-width:110px; padding:3px;">
-        <label style="font-size:11px; display:flex; align-items:center; gap:2px;">文字<input type="color" id="editCatText_${c.id}" value="${c.textColor}" style="width:26px; height:24px; padding:0; cursor:pointer;"></label>
-        <label style="font-size:11px; display:flex; align-items:center; gap:2px;">背景<input type="color" id="editCatBg_${c.id}" value="${bgPickerVal}" ${isTrans ? 'disabled' : ''} style="width:26px; height:24px; padding:0; cursor:pointer;"></label>
-        <label style="font-size:11px; display:flex; align-items:center; cursor:pointer;"><input type="checkbox" id="editCatTrans_${c.id}" ${isTrans ? 'checked' : ''} onchange="document.getElementById('editCatBg_${c.id}').disabled = this.checked;">背景なし</label>
+        <input type="text" id="editCatName_${c.id}" value="${escapeHtml(c.name)}" style="background:${bgPreview}; color:${c.textColor}; font-weight:bold; border:1px solid #777; flex:1; min-width:110px; padding:3px 6px;">
+        <input type="hidden" id="editCatText_${c.id}" value="${c.textColor}">
+        <input type="hidden" id="editCatBg_${c.id}" value="${bgInitVal}">
+        <input type="hidden" id="editCatTrans_${c.id}" value="${isTrans ? '1' : '0'}">
+        <button type="button" class="color-swatch-btn" onclick="openExcelPalette(event, 'editText_${c.id}')">文字 <span class="color-swatch-box" id="editCatTextBox_${c.id}" style="background:${c.textColor};"></span> ▼</button>
+        <button type="button" class="color-swatch-btn" onclick="openExcelPalette(event, 'editBg_${c.id}')">背景 <span class="color-swatch-box ${isTrans ? 'is-trans' : ''}" id="editCatBgBox_${c.id}" style="background:${bgPreview};"></span> <span id="editCatBgLabel_${c.id}">${isTrans ? '透明 ▼' : '▼'}</span></button>
         <button class="btn" style="background:#2b579a; color:#fff; font-weight:bold;" onclick="confirmSaveCategory('${c.id}')">保存</button>
         <button class="btn" onclick="cancelEditCategory()">キャンセル</button>
       </div>`;
@@ -1720,6 +1883,7 @@ function startEditCategory(id) {
   if (inp) inp.focus();
 }
 function cancelEditCategory() {
+  closeExcelPalette();
   editingCatId = null;
   renderSettingsLists();
 }
@@ -1736,7 +1900,8 @@ function confirmSaveCategory(id) {
   if (!confirm(`分類「${c.name}」の設定を「${newName}」の内容で更新しますか？`)) return;
   c.name = newName;
   c.textColor = textEl.value;
-  c.bgColor = transEl.checked ? 'transparent' : bgEl.value;
+  c.bgColor = (transEl.value === '1') ? 'transparent' : bgEl.value;
+  closeExcelPalette();
   editingCatId = null;
   saveData();
   renderSettingsLists();
