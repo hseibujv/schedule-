@@ -535,13 +535,75 @@ const DEFAULT_EVENTS = [
   { id: 'e5', deptId: 'd1', startDate: '2026-11-20', endDate: '2026-11-20', startTime: '13:00', endTime: '14:30', isMultiDay: false, content: '東西送水停止(ﾒﾝﾃの為)', categoryId: 'c13', bold: false, italic: false, underline: false, strike: false, memo: '電磁流量計メンテ' }
 ];
 
-const HOLIDAYS = {
-  '2025-11-03': '文化の日', '2025-11-23': '勤労感謝の日', '2025-11-24': '振替休日',
-  '2026-01-01': '元日', '2026-01-12': '成人の日', '2026-02-11': '建国記念の日', '2026-02-23': '天皇誕生日', '2026-03-20': '春分の日',
-  '2026-04-29': '昭和の日', '2026-05-03': '憲法記念日', '2026-05-04': 'みどりの日', '2026-05-05': 'こどもの日', '2026-05-06': '振替休日',
-  '2026-07-20': '海の日', '2026-08-11': '山の日', '2026-09-21': '敬老の日', '2026-09-22': '国民の休日', '2026-09-23': '秋分の日',
-  '2026-10-12': 'スポーツの日', '2026-11-03': '文化の日', '2026-11-23': '勤労感謝の日'
-};
+// 日本の祝日・振替休日・国民の休日を1990年〜2060年まで自動生成する関数
+const HOLIDAYS = (function() {
+  const map = {};
+  const pad = n => String(n).padStart(2, '0');
+  const nthMon = (y, m, nth) => {
+    const firstDay = new Date(y, m - 1, 1).getDay();
+    const d = 1 + ((8 - firstDay) % 7) + (nth - 1) * 7;
+    return `${y}-${pad(m)}-${pad(d)}`;
+  };
+  for (let y = 1990; y <= 2060; y++) {
+    // 固定祝日
+    map[`${y}-01-01`] = '元日';
+    map[`${y}-02-11`] = '建国記念の日';
+    if (y >= 2020) map[`${y}-02-23`] = '天皇誕生日';
+    map[`${y}-04-29`] = '昭和の日';
+    map[`${y}-05-03`] = '憲法記念日';
+    map[`${y}-05-04`] = 'みどりの日';
+    map[`${y}-05-05`] = 'こどもの日';
+    if (y >= 2016) map[`${y}-08-11`] = '山の日';
+    map[`${y}-11-03`] = '文化の日';
+    map[`${y}-11-23`] = '勤労感謝の日';
+
+    // ハッピーマンデー（成人の日・海の日・敬老の日・スポーツの日）
+    map[nthMon(y, 1, 2)] = '成人の日';
+    map[nthMon(y, 7, 3)] = '海の日';
+    map[nthMon(y, 9, 3)] = '敬老の日';
+    map[nthMon(y, 10, 2)] = (y >= 2020) ? 'スポーツの日' : '体育の日';
+
+    // 春分の日・秋分の日（天文計算式）
+    const vernal = Math.floor(20.8431 + 0.242194 * (y - 1980) - Math.floor((y - 1980) / 4));
+    const autumn = Math.floor(23.2488 + 0.242194 * (y - 1980) - Math.floor((y - 1980) / 4));
+    map[`${y}-03-${pad(vernal)}`] = '春分の日';
+    map[`${y}-09-${pad(autumn)}`] = '秋分の日';
+
+    // 国民の休日（敬老の日と秋分の日に挟まれた火曜日など）
+    for (let m = 1; m <= 12; m++) {
+      const lastD = new Date(y, m, 0).getDate();
+      for (let d = 2; d < lastD; d++) {
+        const cur = `${y}-${pad(m)}-${pad(d)}`;
+        const prev = `${y}-${pad(m)}-${pad(d - 1)}`;
+        const next = `${y}-${pad(m)}-${pad(d + 1)}`;
+        const dow = new Date(y, m - 1, d).getDay();
+        if (!map[cur] && dow !== 0 && map[prev] && map[next]) {
+          map[cur] = '国民の休日';
+        }
+      }
+    }
+
+    // 振替休日（祝日が日曜日の場合、翌月曜以降の最初の平日を振替休日にする）
+    for (let m = 1; m <= 12; m++) {
+      const lastD = new Date(y, m, 0).getDate();
+      for (let d = 1; d <= lastD; d++) {
+        const cur = `${y}-${pad(m)}-${pad(d)}`;
+        if (map[cur] && map[cur] !== '振替休日' && new Date(y, m - 1, d).getDay() === 0) {
+          let nextDt = new Date(y, m - 1, d + 1);
+          while (true) {
+            const nStr = `${nextDt.getFullYear()}-${pad(nextDt.getMonth() + 1)}-${pad(nextDt.getDate())}`;
+            if (!map[nStr]) {
+              map[nStr] = '振替休日';
+              break;
+            }
+            nextDt.setDate(nextDt.getDate() + 1);
+          }
+        }
+      }
+    }
+  }
+  return map;
+})();
 
 const DATA_VERSION = 'v1.6_cloud';
 let viewMode = 7;
