@@ -597,7 +597,7 @@ const HOLIDAYS = (function() {
   return map;
 })();
 
-const DATA_VERSION = 'v1.6_cloud';
+const DATA_VERSION = 'v1.7_cloud_eco';
 let viewMode = 7;
 let baseDate = new Date();
 let depts = [], categories = [], events = [];
@@ -609,6 +609,8 @@ const IS_CLOUD_ENABLED = IS_GAS || HAS_REMOTE_URL;
 let lastCloudUpdatedAt = '';
 let isSavingCloud = false;
 let isSyncingCloud = false;
+let lastUserActivityTime = Date.now();
+const IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5分間無操作で待機モード
 
 function setSyncStatus(text, color = '#1d3567') {
   let el = document.getElementById('cloudSyncBadge');
@@ -621,7 +623,7 @@ function setSyncStatus(text, color = '#1d3567') {
     const refreshBtn = document.createElement('button');
     refreshBtn.className = 'btn';
     refreshBtn.textContent = '🔄 最新読込';
-    refreshBtn.onclick = () => syncFromCloud(true, true);
+    refreshBtn.onclick = () => { lastUserActivityTime = Date.now(); syncFromCloud(true, true); };
     rightBar.insertBefore(refreshBtn, rightBar.firstChild);
     rightBar.insertBefore(el, rightBar.firstChild);
   }
@@ -639,7 +641,36 @@ function isUserEditingModal() {
          !!draggedEventId;
 }
 
-// Apps Script内部でも、GitHub Pages(外部fetch)でも共通で動くクラウド通信ラッパー
+// 「ブラウザが一番手前（アクティブ）かつスケジューラーを開いて操作中か？」を判定
+function isScreenActiveAndFocused() {
+  if (document.hidden) return false;
+  if (typeof document.hasFocus === 'function' && !document.hasFocus()) return false;
+  if (Date.now() - lastUserActivityTime > IDLE_TIMEOUT_MS) return false;
+  return true;
+}
+
+// 操作やフォーカス復帰を検知したら即座にアクティブ復帰＆0秒同期
+function handleUserWakeUp() {
+  const wasInactive = !isScreenActiveAndFocused();
+  lastUserActivityTime = Date.now();
+  if (IS_CLOUD_ENABLED && wasInactive && !isUserEditingModal() && !isSavingCloud) {
+    checkCloudLightweight();
+  }
+}
+
+// ① 0.01秒で終わる超軽量チェック（更新時刻の数字1個だけを確認）
+function callCloudCheck(onSuccess, onError) {
+  if (IS_GAS) {
+    google.script.run.withSuccessHandler(onSuccess).withFailureHandler(onError).loadCloudData();
+  } else if (HAS_REMOTE_URL) {
+    fetch(GAS_WEB_APP_URL + '?action=check&t=' + Date.now(), { method: 'GET', redirect: 'follow' })
+      .then(r => r.json())
+      .then(onSuccess)
+      .catch(onError);
+  }
+}
+
+// ② 変更があった時だけ動く本データ読込
 function callCloudLoad(onSuccess, onError) {
   if (IS_GAS) {
     google.script.run.withSuccessHandler(onSuccess).withFailureHandler(onError).loadCloudData();
@@ -651,6 +682,7 @@ function callCloudLoad(onSuccess, onError) {
   }
 }
 
+// ③ データ保存
 function callCloudSave(payload, onSuccess, onError) {
   if (IS_GAS) {
     google.script.run.withSuccessHandler(onSuccess).withFailureHandler(onError).saveCloudData(payload);
@@ -695,7 +727,7 @@ function logoutApp() {
 function changeLoginPassword() {
   const adminInput = document.getElementById('adminAuthPw').value;
   const newPw = document.getElementById('newUserPw').value.trim();
-  if (adminInput !== getAdminPassword()) { alert('管理者パスワードが正しくありません。（初期値: admin）'); return; }
+  if (adminInput !== getAdminPassword()) { alert('管理者パスワードが正しくありません。'); return; }
   if (!newPw) { alert('新しいログインパスワードを入力してください。'); return; }
   localStorage.setItem('gw_user_pw', newPw);
   saveData();
@@ -704,24 +736,65 @@ function changeLoginPassword() {
   alert('ログインパスワードを変更しました！（クラウドにも反映されました）');
 }
 
-// ================= データ読込・保存・リアルタイム自動同期 =================
+// ================= データ読込・保存・10秒超軽量チェック＆エコモード =================
 function loadData() {
   depts = JSON.parse(localStorage.getItem('gw_depts')) || DEFAULT_DEPTS;
   categories = JSON.parse(localStorage.getItem('gw_categories')) || DEFAULT_CATEGORIES;
   events = JSON.parse(localStorage.getItem('gw_events')) || DEFAULT_EVENTS;
   if (IS_CLOUD_ENABLED) {
+    // 初回起動時は全データを1回読み込む
     syncFromCloud(false, true);
-    setInterval(() => {
-      if (!document.hidden && !isUserEditingModal() && !isSavingCloud) {
-        syncFromCloud(false, false);
-      }
-    }, 15000);
-    document.addEventListener('visibilitychange', () => {
-      if (!document.hidden && !isUserEditingModal() && !isSavingCloud) {
-        syncFromCloud(false, false);
-      }
+
+    // マウス移動・クリック・キー操作・フォーカス復帰を監視
+    ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll'].forEach(evt => {
+      window.addEventListener(evt, () => {
+        const wasIdle = (Date.now() - lastUserActivityTime > IDLE_TIMEOUT_MS);
+        lastUserActivityTime = Date.now();
+        if (wasIdle && !isUserEditingModal() && !isSavingCloud) {
+          checkCloudLightweight();
+        }
+      }, { passive: true });
     });
+    window.addEventListener('focus', () => handleUserWakeUp());
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) handleUserWakeUp();
+      else setSyncStatus('🌙 待機中(エコ)', '#666666');
+    });
+    window.addEventListener('blur', () => {
+      setSyncStatus('🌙 待機中(エコ)', '#666666');
+    });
+
+    // 10秒ごとに判定：アクティブ＆操作中なら超軽量チェック、非アクティブなら通信停止
+    setInterval(() => {
+      if (isUserEditingModal() || isSavingCloud) return;
+      if (isScreenActiveAndFocused()) {
+        checkCloudLightweight();
+      } else {
+        setSyncStatus('🌙 待機中(エコ)', '#666666');
+      }
+    }, 10000);
   }
+}
+
+// 10秒ごとに走る超軽量チェック（変更があった時だけsyncFromCloudを呼ぶ）
+function checkCloudLightweight() {
+  if (!IS_CLOUD_ENABLED || isSyncingCloud || isSavingCloud) return;
+  isSyncingCloud = true;
+  callCloudCheck(
+    res => {
+      isSyncingCloud = false;
+      const remoteTs = (res && res.updatedAt) ? String(res.updatedAt) : (res && res.gw_updated_at ? String(res.gw_updated_at) : '');
+      if (remoteTs && remoteTs !== '0' && remoteTs !== lastCloudUpdatedAt) {
+        // 誰かが更新していた場合のみ、本データを取りに行く
+        syncFromCloud(false, true);
+      } else {
+        setSyncStatus('☁️ 自動同期ON', '#006600');
+      }
+    },
+    () => {
+      isSyncingCloud = false;
+    }
+  );
 }
 
 function syncFromCloud(showNotice = false, forceRender = false) {
@@ -732,14 +805,14 @@ function syncFromCloud(showNotice = false, forceRender = false) {
     res => {
       isSyncingCloud = false;
       if (res && (res.gw_events || res.gw_depts || res.gw_categories)) {
-        const remoteUpdatedAt = res.gw_updated_at || '';
+        const remoteUpdatedAt = res.gw_updated_at ? String(res.gw_updated_at) : '';
         const hasChanged = forceRender || !lastCloudUpdatedAt || (remoteUpdatedAt !== lastCloudUpdatedAt);
         if (hasChanged) {
           if (res.gw_depts) { depts = JSON.parse(res.gw_depts); localStorage.setItem('gw_depts', res.gw_depts); }
           if (res.gw_categories) { categories = JSON.parse(res.gw_categories); localStorage.setItem('gw_categories', res.gw_categories); }
           if (res.gw_events) { events = JSON.parse(res.gw_events); localStorage.setItem('gw_events', res.gw_events); }
           if (res.gw_user_pw) { localStorage.setItem('gw_user_pw', res.gw_user_pw); }
-          lastCloudUpdatedAt = remoteUpdatedAt;
+          if (remoteUpdatedAt) lastCloudUpdatedAt = remoteUpdatedAt;
           populateSelectors();
           renderCalendar();
         }
@@ -787,7 +860,7 @@ function saveData() {
 }
 
 function resetSampleData() {
-  const pw = prompt('初期データに戻すには管理者パスワードを入力してください（初期値: admin）');
+  const pw = prompt('初期データに戻すには管理者パスワードを入力してください');
   if (pw !== getAdminPassword()) { alert('管理者パスワードが違います。'); return; }
   depts = JSON.parse(JSON.stringify(DEFAULT_DEPTS));
   categories = JSON.parse(JSON.stringify(DEFAULT_CATEGORIES));
