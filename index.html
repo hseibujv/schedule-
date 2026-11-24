@@ -1896,28 +1896,6 @@ function deleteBackupUI() {
   });
 }
 
-function restoreBackupUI() {
-  const sel = document.getElementById('backupSheetSelect');
-  const sheetName = sel ? sel.value : '';
-  if (!sheetName) { alert('復元するバックアップを選択してください。'); return; }
-  const pw = prompt(`【重要】バックアップ「${sheetName}」の時点に全データを復元します。\nよろしければ管理者パスワードを入力してください。`);
-  if (pw !== getAdminPassword()) { alert('管理者パスワードが違います。'); return; }
-
-  setSyncStatus('☁️ 復元中...', '#b36b00');
-  callCloudBackupApi({ action: 'restoreBackup', sheetName }, res => {
-    if (res && res.ok) {
-      syncFromCloud(false, true);
-      alert(`バックアップ「${sheetName}」からの復元が完了しました！`);
-    } else {
-      setSyncStatus('⚠️ エラー', '#cc0000');
-      alert('復元に失敗しました: ' + (res && res.error ? res.error : ''));
-    }
-  }, err => {
-    setSyncStatus('⚠️ エラー', '#cc0000');
-    alert('通信エラー: ' + err);
-  });
-}
-
 function buildExcelPaletteHtml(allowTransparent) {
   let html = `<div class="ep-title">テーマの色</div><div class="ep-grid" style="margin-bottom:5px;">`;
   EXCEL_THEME_MAIN.forEach(c => { html += `<div class="ep-cell" style="background:${c};" onclick="pickExcelColor('${c}')"></div>`; });
