@@ -1775,7 +1775,7 @@ function ensureExcelColorPalette() {
   }
 }
 
-// 設定モーダル内に「バックアップ作成＆復元パネル」を自動生成する関数
+// 設定モーダル内に「バックアップ作成・復元・削除パネル」を自動生成する関数
 function ensureBackupSectionUI() {
   if (document.getElementById('backupAdminSection')) return;
   const modalBody = document.querySelector('#settingsModal .modal-body');
@@ -1791,9 +1791,10 @@ function ensureBackupSectionUI() {
       <button type="button" class="btn" style="background:#2b579a; color:#fff; font-weight:bold;" onclick="createManualBackupUI()">💾 今すぐバックアップ作成</button>
     </div>
     <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
-      <select id="backupSheetSelect" style="flex:1; min-width:180px; padding:3px;"><option value="">読込中...</option></select>
-      <button type="button" class="btn" onclick="fetchBackupListUI()">🔄 一覧更新</button>
-      <button type="button" class="btn btn-danger" style="font-weight:bold;" onclick="restoreBackupUI()">⏪ この時点に復元</button>
+      <select id="backupSheetSelect" style="flex:1; min-width:170px; padding:3px;"><option value="">読込中...</option></select>
+      <button type="button" class="btn" onclick="fetchBackupListUI()">🔄 更新</button>
+      <button type="button" class="btn" style="font-weight:bold; color:#004085;" onclick="restoreBackupUI()">⏪ 復元</button>
+      <button type="button" class="btn btn-danger" onclick="deleteBackupUI()">🗑️ 削除</button>
     </div>
   `;
   modalBody.insertBefore(sec, modalBody.lastElementChild);
@@ -1804,6 +1805,7 @@ function callCloudBackupApi(payload, onSuccess, onError) {
     if (payload.action === 'listBackups') google.script.run.withSuccessHandler(r => onSuccess({ ok: true, backups: r })).withFailureHandler(onError).listBackupSheets_();
     else if (payload.action === 'createBackup') google.script.run.withSuccessHandler(onSuccess).withFailureHandler(onError).createManualBackup_(payload.label);
     else if (payload.action === 'restoreBackup') google.script.run.withSuccessHandler(onSuccess).withFailureHandler(onError).restoreFromBackupSheet_(payload.sheetName);
+    else if (payload.action === 'deleteBackup') google.script.run.withSuccessHandler(onSuccess).withFailureHandler(onError).deleteBackupSheet_(payload.sheetName);
   } else if (HAS_REMOTE_URL) {
     fetch(GAS_WEB_APP_URL, {
       method: 'POST',
@@ -1843,6 +1845,50 @@ function createManualBackupUI() {
       alert(`バックアップシート「${res.sheetName}」を作成しました！\n（手動バックアップは自動削除されず永久に残ります）`);
     } else {
       alert('バックアップ作成に失敗しました: ' + (res && res.error ? res.error : ''));
+    }
+  }, err => {
+    setSyncStatus('⚠️ エラー', '#cc0000');
+    alert('通信エラー: ' + err);
+  });
+}
+
+function restoreBackupUI() {
+  const sel = document.getElementById('backupSheetSelect');
+  const sheetName = sel ? sel.value : '';
+  if (!sheetName) { alert('復元するバックアップを選択してください。'); return; }
+  const pw = prompt(`【重要】バックアップ「${sheetName}」の時点に全データを復元します。\nよろしければ管理者パスワードを入力してください。`);
+  if (pw !== getAdminPassword()) { alert('管理者パスワードが違います。'); return; }
+
+  setSyncStatus('☁️ 復元中...', '#b36b00');
+  callCloudBackupApi({ action: 'restoreBackup', sheetName }, res => {
+    if (res && res.ok) {
+      syncFromCloud(false, true);
+      alert(`バックアップ「${sheetName}」からの復元が完了しました！`);
+    } else {
+      setSyncStatus('⚠️ エラー', '#cc0000');
+      alert('復元に失敗しました: ' + (res && res.error ? res.error : ''));
+    }
+  }, err => {
+    setSyncStatus('⚠️ エラー', '#cc0000');
+    alert('通信エラー: ' + err);
+  });
+}
+
+function deleteBackupUI() {
+  const sel = document.getElementById('backupSheetSelect');
+  const sheetName = sel ? sel.value : '';
+  if (!sheetName) { alert('削除するバックアップを選択してください。'); return; }
+  const pw = prompt(`バックアップシート「${sheetName}」を完全に削除します。\nよろしければ管理者パスワードを入力してください。`);
+  if (pw !== getAdminPassword()) { alert('管理者パスワードが違います。'); return; }
+
+  setSyncStatus('☁️ 削除中...', '#b36b00');
+  callCloudBackupApi({ action: 'deleteBackup', sheetName }, res => {
+    setSyncStatus('☁️ 自動同期ON', '#006600');
+    if (res && res.ok) {
+      fetchBackupListUI();
+      alert(`バックアップシート「${sheetName}」を削除しました。`);
+    } else {
+      alert('削除に失敗しました: ' + (res && res.error ? res.error : ''));
     }
   }, err => {
     setSyncStatus('⚠️ エラー', '#cc0000');
