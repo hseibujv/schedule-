@@ -1656,13 +1656,12 @@ function deleteEventFromModal() {
   saveData(); closeEventModal(); renderCalendar();
 }
 
-// ================= 設定モーダル制御（Excel風カラーパレット＋確認OK確定方式） =================
+// ================= 設定モーダル制御（Excelパレット＋確認OK確定＋バックアップ復元機能） =================
 let editingDeptId = null;
 let editingCatId = null;
 let activeColorTarget = null;
 let recentColors = JSON.parse(localStorage.getItem('gw_recent_colors') || '["#0000ff","#99ff99","#ffff99"]');
 
-// Excel風「テーマの色」（10列 × 6行）
 const EXCEL_THEME_MAIN = ['#ffffff','#000000','#e7e6e6','#44546a','#5b9bd5','#ed7d31','#a5a5a5','#ffc000','#4472c4','#70ad47'];
 const EXCEL_THEME_SHADES = [
   ['#f2f2f2','#7f7f7f','#d0cece','#d6dce4','#deeaf6','#fbe5d5','#ededed','#fff2cc','#d9e2f3','#e2efd9'],
@@ -1671,7 +1670,6 @@ const EXCEL_THEME_SHADES = [
   ['#a5a5a5','#262626','#3a3838','#323f4f','#2e75b5','#c55a11','#7b7b7b','#bf9000','#2f5496','#538135'],
   ['#7f7f7f','#0c0c0c','#171616','#222a35','#1e4e79','#833c0b','#525252','#7f6000','#1f3864','#375623']
 ];
-// Excel風「標準の色」＋GroupWatcher定番色（10列 × 2行）
 const EXCEL_STANDARD_COLORS = [
   '#c00000','#ff0000','#ffc000','#ffff00','#92d050','#00b050','#00b0f0','#0070c0','#002060','#7030a0',
   '#800000','#ff99ff','#ff8080','#ffff99','#99ff99','#80ffff','#00ffff','#3366ff','#8000ff','#993366'
@@ -1708,7 +1706,6 @@ function ensureExcelColorPalette() {
     document.body.appendChild(pop);
     document.addEventListener('click', () => closeExcelPalette());
   }
-  // 設定画面の新規追加欄にある標準カラーピッカーも自動的にExcelパレットボタンに変換
   const addTextInp = document.getElementById('newCatText');
   if (addTextInp && addTextInp.style.display !== 'none') {
     addTextInp.style.display = 'none';
@@ -1730,6 +1727,103 @@ function ensureExcelColorPalette() {
       addBgInp.parentNode.insertBefore(btnB, addBgInp);
     }
   }
+}
+
+// 設定モーダル内に「バックアップ作成＆復元パネル」を自動生成する関数
+function ensureBackupSectionUI() {
+  if (document.getElementById('backupAdminSection')) return;
+  const modalBody = document.querySelector('#settingsModal .modal-body');
+  if (!modalBody) return;
+  const sec = document.createElement('div');
+  sec.id = 'backupAdminSection';
+  sec.className = 'settings-section';
+  sec.style.background = '#f4f8ff';
+  sec.innerHTML = `
+    <div style="font-weight:bold; margin-bottom:4px;">🛡️ データバックアップ＆復元（※要管理者PW / 自動バックアップは毎日最大7世代保持）</div>
+    <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-bottom:6px;">
+      <input type="text" id="backupMemoLabel" placeholder="メモ名（例: 本番開始前）" style="flex:1; min-width:130px; padding:3px;">
+      <button type="button" class="btn" style="background:#2b579a; color:#fff; font-weight:bold;" onclick="createManualBackupUI()">💾 今すぐバックアップ作成</button>
+    </div>
+    <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+      <select id="backupSheetSelect" style="flex:1; min-width:180px; padding:3px;"><option value="">読込中...</option></select>
+      <button type="button" class="btn" onclick="fetchBackupListUI()">🔄 一覧更新</button>
+      <button type="button" class="btn btn-danger" style="font-weight:bold;" onclick="restoreBackupUI()">⏪ この時点に復元</button>
+    </div>
+  `;
+  modalBody.insertBefore(sec, modalBody.lastElementChild);
+}
+
+function callCloudBackupApi(payload, onSuccess, onError) {
+  if (IS_GAS) {
+    if (payload.action === 'listBackups') google.script.run.withSuccessHandler(r => onSuccess({ ok: true, backups: r })).withFailureHandler(onError).listBackupSheets_();
+    else if (payload.action === 'createBackup') google.script.run.withSuccessHandler(onSuccess).withFailureHandler(onError).createManualBackup_(payload.label);
+    else if (payload.action === 'restoreBackup') google.script.run.withSuccessHandler(onSuccess).withFailureHandler(onError).restoreFromBackupSheet_(payload.sheetName);
+  } else if (HAS_REMOTE_URL) {
+    fetch(GAS_WEB_APP_URL, {
+      method: 'POST',
+      redirect: 'follow',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify(payload)
+    }).then(r => r.json()).then(onSuccess).catch(onError);
+  }
+}
+
+function fetchBackupListUI() {
+  const sel = document.getElementById('backupSheetSelect');
+  if (!sel || !IS_CLOUD_ENABLED) return;
+  sel.innerHTML = '<option value="">バックアップ一覧を取得中...</option>';
+  callCloudBackupApi({ action: 'listBackups' }, res => {
+    const list = (res && res.backups) ? res.backups : [];
+    if (list.length === 0) {
+      sel.innerHTML = '<option value="">バックアップはまだありません</option>';
+    } else {
+      sel.innerHTML = list.map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('');
+    }
+  }, () => {
+    sel.innerHTML = '<option value="">一覧の取得に失敗しました</option>';
+  });
+}
+
+function createManualBackupUI() {
+  const pw = prompt('手動バックアップを作成するには管理者パスワードを入力してください');
+  if (pw !== getAdminPassword()) { alert('管理者パスワードが違います。'); return; }
+  const label = document.getElementById('backupMemoLabel').value.trim();
+  setSyncStatus('☁️ バックアップ中...', '#b36b00');
+  callCloudBackupApi({ action: 'createBackup', label }, res => {
+    setSyncStatus('☁️ 自動同期ON', '#006600');
+    if (res && res.ok) {
+      document.getElementById('backupMemoLabel').value = '';
+      fetchBackupListUI();
+      alert(`バックアップシート「${res.sheetName}」を作成しました！\n（手動バックアップは自動削除されず永久に残ります）`);
+    } else {
+      alert('バックアップ作成に失敗しました: ' + (res && res.error ? res.error : ''));
+    }
+  }, err => {
+    setSyncStatus('⚠️ エラー', '#cc0000');
+    alert('通信エラー: ' + err);
+  });
+}
+
+function restoreBackupUI() {
+  const sel = document.getElementById('backupSheetSelect');
+  const sheetName = sel ? sel.value : '';
+  if (!sheetName) { alert('復元するバックアップを選択してください。'); return; }
+  const pw = prompt(`【重要】バックアップ「${sheetName}」の時点に全データを復元します。\nよろしければ管理者パスワードを入力してください。`);
+  if (pw !== getAdminPassword()) { alert('管理者パスワードが違います。'); return; }
+
+  setSyncStatus('☁️ 復元中...', '#b36b00');
+  callCloudBackupApi({ action: 'restoreBackup', sheetName }, res => {
+    if (res && res.ok) {
+      syncFromCloud(false, true);
+      alert(`バックアップ「${sheetName}」からの復元が完了しました！`);
+    } else {
+      setSyncStatus('⚠️ エラー', '#cc0000');
+      alert('復元に失敗しました: ' + (res && res.error ? res.error : ''));
+    }
+  }, err => {
+    setSyncStatus('⚠️ エラー', '#cc0000');
+    alert('通信エラー: ' + err);
+  });
 }
 
 function buildExcelPaletteHtml(allowTransparent) {
@@ -1821,6 +1915,8 @@ function updateEditCatPreview(cid) {
 
 function openSettingsModal() {
   ensureExcelColorPalette();
+  ensureBackupSectionUI();
+  fetchBackupListUI();
   editingDeptId = null;
   editingCatId = null;
   renderSettingsLists();
@@ -1836,7 +1932,6 @@ function closeSettingsModal() {
 }
 
 function renderSettingsLists() {
-  // 1. 部署リスト（表示行 ＋ ↑ ↓ 編集 削除）
   let dHtml = '';
   depts.forEach((d, idx) => {
     if (editingDeptId === d.id) {
@@ -1857,7 +1952,6 @@ function renderSettingsLists() {
   });
   document.getElementById('settingsDeptList').innerHTML = dHtml;
 
-  // 2. 分類リスト（色見本表示行 ＋ 編集 削除 ※↑↓なし・Excelパレット対応）
   let cHtml = '';
   categories.forEach(c => {
     const isTrans = (c.bgColor === 'transparent');
@@ -1885,7 +1979,6 @@ function renderSettingsLists() {
   document.getElementById('settingsCatList').innerHTML = cHtml;
 }
 
-// 部署の追加・編集・移動・削除
 function addDept() {
   const el = document.getElementById('newDeptName');
   if (!el.value.trim()) return;
@@ -1931,7 +2024,6 @@ function removeDept(id) {
   renderSettingsLists();
 }
 
-// 分類の追加・編集・削除
 function addCategory() {
   const el = document.getElementById('newCatName');
   if (!el.value.trim()) return;
