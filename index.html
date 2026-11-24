@@ -812,10 +812,25 @@ function syncFromCloud(showNotice = false, forceRender = false) {
         const remoteUpdatedAt = res.gw_updated_at ? String(res.gw_updated_at) : '';
         const hasChanged = forceRender || !lastCloudUpdatedAt || (remoteUpdatedAt !== lastCloudUpdatedAt);
         if (hasChanged) {
-          if (res.gw_depts) { depts = JSON.parse(res.gw_depts); localStorage.setItem('gw_depts', res.gw_depts); }
-          if (res.gw_categories) { categories = JSON.parse(res.gw_categories); localStorage.setItem('gw_categories', res.gw_categories); }
-          if (res.gw_events) { events = JSON.parse(res.gw_events); localStorage.setItem('gw_events', res.gw_events); }
-          if (res.gw_user_pw) { localStorage.setItem('gw_user_pw', res.gw_user_pw); }
+          if (res.gw_depts) {
+            depts = JSON.parse(res.gw_depts);
+            try { localStorage.setItem('gw_depts', res.gw_depts); } catch (e) {}
+          }
+          if (res.gw_categories) {
+            categories = JSON.parse(res.gw_categories);
+            try { localStorage.setItem('gw_categories', res.gw_categories); } catch (e) {}
+          }
+          if (res.gw_events) {
+            events = JSON.parse(res.gw_events);
+            try {
+              localStorage.setItem('gw_events', res.gw_events);
+            } catch (e) {
+              try { localStorage.removeItem('gw_events'); } catch (err) {}
+            }
+          }
+          if (res.gw_user_pw) {
+            try { localStorage.setItem('gw_user_pw', res.gw_user_pw); } catch (e) {}
+          }
           if (remoteUpdatedAt) lastCloudUpdatedAt = remoteUpdatedAt;
           populateSelectors();
           renderCalendar();
@@ -833,7 +848,7 @@ function syncFromCloud(showNotice = false, forceRender = false) {
     }
   );
 }
-
+ 
 function saveData() {
   const dStr = JSON.stringify(depts);
   const cStr = JSON.stringify(categories);
