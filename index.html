@@ -1645,19 +1645,30 @@ function ctxAction(act) {
 }
 
 document.addEventListener('keydown', e => {
-  const isModal = document.getElementById('eventModal').classList.contains('show') ||
-                  document.getElementById('settingsModal').classList.contains('show') ||
-                  document.getElementById('importModal').classList.contains('show');
-  if (isModal) return;
+  const eventModalOpen = document.getElementById('eventModal').classList.contains('show');
+  if (eventModalOpen) {
+    // 日本語変換中(IME入力中)のEnterキーでは確定させない
+    if (e.isComposing || e.keyCode === 229) return;
+    if (e.key === 'Enter') {
+      // 詳細メモ欄(textarea)では通常のEnterは改行とし、Ctrl+Enterのときだけ保存する
+      if (e.target && e.target.tagName === 'TEXTAREA' && !e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      saveEvent();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      closeEventModal();
+    }
+    return;
+  }
+
+  const isOtherModal = document.getElementById('settingsModal').classList.contains('show') ||
+                       document.getElementById('importModal').classList.contains('show');
+  if (isOtherModal) return;
+
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c' && selectedEventId) { e.preventDefault(); copySelectedEvent(); }
   else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'x' && selectedEventId) { e.preventDefault(); cutSelectedEvent(); }
   else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v' && clipboardEvent && selectedCell) { e.preventDefault(); pasteToSelectedCell(); }
   else if (e.key === 'Delete' && selectedEventId) { e.preventDefault(); deleteSelectedEvent(); }
-});
-document.addEventListener('click', e => {
-  hideContextMenu();
-  const dd = document.getElementById('customCatDropdown');
-  if (dd && !dd.contains(e.target)) document.getElementById('customCatList').classList.remove('open');
 });
 
 // ================= 予定追加・編集モーダル制御 =================
