@@ -1422,7 +1422,6 @@ function buildWeekRowGridHtml(deptId, days, gridClass, isMonthMode, currentMonth
   const startStr = formatDate(days[0]), endStr = formatDate(days[days.length - 1]);
   const rowEvents = events.filter(ev => ev.deptId === deptId && !(ev.endDate < startStr || ev.startDate > endStr));
 
-  // 1. 複数日予定（横長の帯）と、単日予定（1日だけの予定）を分離する
   const multiEvents = [];
   const singleEventsByDay = Array.from({ length: days.length }, () => []);
 
@@ -1481,7 +1480,7 @@ function buildWeekRowGridHtml(deptId, days, gridClass, isMonthMode, currentMonth
     return `<div class="event-bar ${isTrans ? 'transparent-bg' : ''} ${isMultiBar ? 'multi-day-bar' : ''} ${selectedEventId === ev.id ? 'selected-event' : ''}" draggable="true" style="${gridStyle} background:${isTrans ? 'transparent' : cat.bgColor}; color:${cat ? cat.textColor : '#000'}; ${fontStyles}" title="${escapeHtml(titleAttr)}" onclick="selectEventBar(event, '${ev.id}', '${deptId}', '${ev.startDate}')" ondblclick="event.stopPropagation(); openEventModalEdit('${ev.id}')" oncontextmenu="onEventContextMenu(event, '${ev.id}', '${deptId}', '${ev.startDate}')" ondragstart="onEventDragStart(event, '${ev.id}')">${escapeHtml(displayContent)}</div>`;
   };
 
-  // ① 複数日予定（横長の帯）を上の共通レーンに配置
+  // ① 複数日予定（横長の帯）を配置し、各日にどの段まで帯があるかを記録
   multiEvents.forEach(ev => {
     const sIdx = Math.max(0, days.findIndex(d => formatDate(d) >= ev.startDate));
     let eIdx = days.findIndex(d => formatDate(d) > ev.endDate);
@@ -1501,11 +1500,15 @@ function buildWeekRowGridHtml(deptId, days, gridClass, isMonthMode, currentMonth
     html += renderBarHtml(ev, `grid-column:${sIdx + 1} / span ${span}; grid-row:${baseRowOffset + laneIndex};`, true);
   });
 
-  // ② 単日予定は、曜日ごとに独立した縦積みコンテナ（Flexbox）に入れて配置（隣の日の2行表示の影響を完全に遮断！）
-  const singleRowIndex = baseRowOffset + lanes.length;
+  // ② 各日の単日予定を、「その日に重なっている帯のすぐ下（帯がない日は1段目＝最上部）」からピタッと上付きで配置！
   singleEventsByDay.forEach((dayEvList, dIdx) => {
     if (dayEvList.length === 0) return;
-    html += `<div style="grid-column:${dIdx + 1}; grid-row:${singleRowIndex}; display:flex; flex-direction:column; align-items:stretch; pointer-events:none;">`;
+    let dayStartLane = 0;
+    for (let l = 0; l < lanes.length; l++) {
+      if (lanes[l][dIdx]) dayStartLane = l + 1;
+    }
+    const startRow = baseRowOffset + dayStartLane;
+    html += `<div style="grid-column:${dIdx + 1}; grid-row:${startRow} / span 30; display:flex; flex-direction:column; align-items:stretch; pointer-events:none;">`;
     dayEvList.forEach(ev => {
       html += renderBarHtml(ev, 'width:calc(100% - 4px);', false);
     });
