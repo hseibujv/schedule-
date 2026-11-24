@@ -903,18 +903,36 @@ function ensureFolderSelectButton() {
   if (document.getElementById('importFolderInput')) return;
   const dz = document.getElementById('importDropZone');
   if (!dz) return;
+
+  // 上部にあったグレー枠（部署・年月）から「部署」プルダウンを取り出し、グレー枠ごと非表示にする
+  const deptSel = document.getElementById('importFallbackDept');
+  if (deptSel) {
+    const oldSec = deptSel.closest('.settings-section');
+    if (oldSec) oldSec.style.display = 'none';
+  }
+
   const wrap = document.createElement('div');
-  wrap.style.cssText = 'text-align:center; margin-bottom:8px; display:flex; flex-direction:column; gap:6px; align-items:center;';
+  wrap.style.cssText = 'text-align:center; margin-bottom:8px; display:flex; flex-direction:column; gap:8px; align-items:center;';
   wrap.innerHTML = `
-    <button type="button" class="btn" style="padding:6px 14px; font-weight:bold; background:#2b579a; color:#fff; border:none; border-radius:4px; width:100%; max-width:420px;" onclick="document.getElementById('importFolderInput').click()">
+    <button type="button" class="btn" style="padding:6px 14px; font-weight:bold; background:#2b579a; color:#fff; border:none; border-radius:4px; width:100%; max-width:440px;" onclick="document.getElementById('importFolderInput').click()">
       📁 フォルダごと選択して一括取込（「部署」親フォルダ・各部署フォルダ対応）
     </button>
-    <button type="button" class="btn btn-danger" style="padding:4px 10px; font-size:12px;" onclick="clearSelectedDeptEventsUI()">
-      🧹 上で選択中の「部署」の予定のみをすべてクリア（やり直し用・要管理者PW）
-    </button>
+    <div style="border-top:1px solid #ddd; width:100%; max-width:440px; padding-top:8px; margin-top:2px; display:flex; flex-direction:column; gap:6px; align-items:center;">
+      <div id="deptSelectHolder" style="display:flex; align-items:center; justify-content:center; gap:6px; font-size:12.5px; font-weight:bold;">
+        <span>対象部署（ファイル単体取込・クリア用）:</span>
+      </div>
+      <button type="button" class="btn btn-danger" style="padding:4px 10px; font-size:12px; width:100%; max-width:440px;" onclick="clearSelectedDeptEventsUI()">
+        🧹 上で選択中の「部署」の予定のみをすべてクリア（やり直し用・要管理者PW）
+      </button>
+    </div>
     <input type="file" id="importFolderInput" webkitdirectory directory multiple style="display:none;" onchange="onImportFolderSelect(this)">
   `;
   dz.parentNode.insertBefore(wrap, dz.nextSibling);
+
+  if (deptSel) {
+    deptSel.style.padding = '3px 8px';
+    document.getElementById('deptSelectHolder').appendChild(deptSel);
+  }
 }
 
 // インポート画面で選択されている特定の部署の予定だけをリセットする関数
@@ -1418,13 +1436,11 @@ function buildWeekRowGridHtml(deptId, days, gridClass, isMonthMode, currentMonth
     }
   });
 
-  // 複数日予定は開始日順・期間が長い順にソート
   multiEvents.sort((a, b) => {
     if (a.startDate !== b.startDate) return a.startDate.localeCompare(b.startDate);
     return b.endDate.localeCompare(a.endDate);
   });
 
-  // 各日の単日予定は時刻なし（終日）を上、時刻付きを時間順にソート
   singleEventsByDay.forEach(list => {
     list.sort((a, b) => {
       const tA = a.startTime || '';
@@ -1452,8 +1468,7 @@ function buildWeekRowGridHtml(deptId, days, gridClass, isMonthMode, currentMonth
   const baseRowOffset = isMonthMode ? 2 : 1;
   const lanes = [];
 
-  // 予定バーのHTMLを生成する共通補助関数
-  const renderBarHtml = (ev, colStart, span, gridRow, isMultiBar) => {
+  const renderBarHtml = (ev, gridStyle, isMultiBar) => {
     const cat = categories.find(c => c.id === ev.categoryId) || categories[0];
     const isTrans = !cat || cat.bgColor === 'transparent';
     let fontStyles = (ev.bold ? 'font-weight:bold;' : '') + (ev.italic ? 'font-style:italic;' : '');
@@ -1463,10 +1478,10 @@ function buildWeekRowGridHtml(deptId, days, gridClass, isMonthMode, currentMonth
     const hasMemo = ev.memo && ev.memo.trim().length > 0;
     const displayContent = timePrefix + ev.content + (hasMemo ? '/★' : '');
     const titleAttr = hasMemo ? `【詳細メモ】\n${ev.memo}` : ev.content;
-    return `<div class="event-bar ${isTrans ? 'transparent-bg' : ''} ${isMultiBar ? 'multi-day-bar' : ''} ${selectedEventId === ev.id ? 'selected-event' : ''}" draggable="true" style="grid-column:${colStart} / span ${span}; grid-row:${gridRow}; background:${isTrans ? 'transparent' : cat.bgColor}; color:${cat ? cat.textColor : '#000'}; ${fontStyles}" title="${escapeHtml(titleAttr)}" onclick="selectEventBar(event, '${ev.id}', '${deptId}', '${ev.startDate}')" ondblclick="event.stopPropagation(); openEventModalEdit('${ev.id}')" oncontextmenu="onEventContextMenu(event, '${ev.id}', '${deptId}', '${ev.startDate}')" ondragstart="onEventDragStart(event, '${ev.id}')">${escapeHtml(displayContent)}</div>`;
+    return `<div class="event-bar ${isTrans ? 'transparent-bg' : ''} ${isMultiBar ? 'multi-day-bar' : ''} ${selectedEventId === ev.id ? 'selected-event' : ''}" draggable="true" style="${gridStyle} background:${isTrans ? 'transparent' : cat.bgColor}; color:${cat ? cat.textColor : '#000'}; ${fontStyles}" title="${escapeHtml(titleAttr)}" onclick="selectEventBar(event, '${ev.id}', '${deptId}', '${ev.startDate}')" ondblclick="event.stopPropagation(); openEventModalEdit('${ev.id}')" oncontextmenu="onEventContextMenu(event, '${ev.id}', '${deptId}', '${ev.startDate}')" ondragstart="onEventDragStart(event, '${ev.id}')">${escapeHtml(displayContent)}</div>`;
   };
 
-  // ① まず複数日予定（帯）を上のレーンに配置
+  // ① 複数日予定（横長の帯）を上の共通レーンに配置
   multiEvents.forEach(ev => {
     const sIdx = Math.max(0, days.findIndex(d => formatDate(d) >= ev.startDate));
     let eIdx = days.findIndex(d => formatDate(d) > ev.endDate);
@@ -1483,17 +1498,18 @@ function buildWeekRowGridHtml(deptId, days, gridClass, isMonthMode, currentMonth
       }
       laneIndex++;
     }
-    html += renderBarHtml(ev, sIdx + 1, span, baseRowOffset + laneIndex, true);
+    html += renderBarHtml(ev, `grid-column:${sIdx + 1} / span ${span}; grid-row:${baseRowOffset + laneIndex};`, true);
   });
 
-  // ② 次に各日の単日予定を、その日の空いている一番上の段から隙間なく詰めて配置
-  const multiLaneCount = lanes.length;
+  // ② 単日予定は、曜日ごとに独立した縦積みコンテナ（Flexbox）に入れて配置（隣の日の2行表示の影響を完全に遮断！）
+  const singleRowIndex = baseRowOffset + lanes.length;
   singleEventsByDay.forEach((dayEvList, dIdx) => {
-    let currentRow = baseRowOffset + multiLaneCount;
+    if (dayEvList.length === 0) return;
+    html += `<div style="grid-column:${dIdx + 1}; grid-row:${singleRowIndex}; display:flex; flex-direction:column; align-items:stretch; pointer-events:none;">`;
     dayEvList.forEach(ev => {
-      html += renderBarHtml(ev, dIdx + 1, 1, currentRow, false);
-      currentRow++;
+      html += renderBarHtml(ev, 'width:calc(100% - 4px);', false);
     });
+    html += `</div>`;
   });
 
   return html + `</div></div>`;
