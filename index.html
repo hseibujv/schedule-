@@ -650,10 +650,11 @@ function isScreenActiveAndFocused() {
 }
 
 // 操作やフォーカス復帰を検知したら即座にアクティブ復帰＆0秒同期
+// 操作やフォーカス復帰を検知したら即座にアクティブ復帰＆0秒同期
 function handleUserWakeUp() {
-  const wasInactive = !isScreenActiveAndFocused();
   lastUserActivityTime = Date.now();
-  if (IS_CLOUD_ENABLED && wasInactive && !isUserEditingModal() && !isSavingCloud) {
+  if (IS_CLOUD_ENABLED && !isUserEditingModal() && !isSavingCloud) {
+    setSyncStatus('☁️ 自動同期ON', '#006600');
     checkCloudLightweight();
   }
 }
@@ -745,12 +746,15 @@ function loadData() {
     // 初回起動時は全データを1回読み込む
     syncFromCloud(false, true);
 
-    // マウス移動・クリック・キー操作・フォーカス復帰を監視
+    // マウス移動・クリック・キー操作・フォーカス復帰を監視（0秒即時復帰）
     ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll'].forEach(evt => {
       window.addEventListener(evt, () => {
         const wasIdle = (Date.now() - lastUserActivityTime > IDLE_TIMEOUT_MS);
         lastUserActivityTime = Date.now();
-        if (wasIdle && !isUserEditingModal() && !isSavingCloud) {
+        const badge = document.getElementById('cloudSyncBadge');
+        const isShowingEco = badge && badge.textContent.indexOf('待機中') !== -1;
+        if ((wasIdle || isShowingEco) && !isUserEditingModal() && !isSavingCloud) {
+          setSyncStatus('☁️ 自動同期ON', '#006600');
           checkCloudLightweight();
         }
       }, { passive: true });
