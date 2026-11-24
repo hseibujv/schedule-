@@ -839,10 +839,19 @@ function saveData() {
   const cStr = JSON.stringify(categories);
   const eStr = JSON.stringify(events);
   const pwStr = getUserPassword();
-  localStorage.setItem('gw_version', DATA_VERSION);
-  localStorage.setItem('gw_depts', dStr);
-  localStorage.setItem('gw_categories', cStr);
-  localStorage.setItem('gw_events', eStr);
+
+  // ブラウザのlocalStorage容量上限(5MB)を超えても絶対にエラーで固まらないよう個別に保護
+  try {
+    localStorage.setItem('gw_version', DATA_VERSION);
+    localStorage.setItem('gw_depts', dStr);
+    localStorage.setItem('gw_categories', cStr);
+  } catch (e) {}
+  try {
+    localStorage.setItem('gw_events', eStr);
+  } catch (e) {
+    // 5年分等で5MBを超えた場合は古いローカルキャッシュを空にしてクラウド主体で動かす
+    try { localStorage.removeItem('gw_events'); } catch (err) {}
+  }
 
   if (IS_CLOUD_ENABLED) {
     isSavingCloud = true;
@@ -984,8 +993,9 @@ async function onImportFolderSelect(input) {
 function readFileAsShiftJis(file) {
   return new Promise(resolve => {
     const reader = new FileReader();
-    reader.onload = e => resolve(e.target.result || '');
-    reader.onerror = () => resolve('');
+    const timer = setTimeout(() => resolve(''), 5000); // 万が一のファイル読込フリーズ防止タイマー
+    reader.onload = e => { clearTimeout(timer); resolve(e.target.result || ''); };
+    reader.onerror = () => { clearTimeout(timer); resolve(''); };
     reader.readAsText(file, 'Shift_JIS');
   });
 }
@@ -999,209 +1009,242 @@ function isDigitsOnly(str) {
   return true;
 }
 
+// バックスラッシュを使わない安全な改行分割関数
+function splitLinesSafe(text) {
+  if (!text) return [];
+  const LF = String.fromCharCode(10);
+  const CR = String.fromCharCode(13);
+  return text.split(LF).map(l => l.split(CR).join('')).filter(l => l.trim().length > 0);
+}
+
 async function processImportedFileRecords(fileRecords) {
-  const validExts = ['sch', 'dtl', 'csv', 'txt'];
-  const validRecords = fileRecords.filter(r => {
-    if (!r.file || !r.file.name || r.file.size === 0) return false;
-    const parts = r.file.name.split('.');
-    if (parts.length < 2) return false;
-    const ext = parts[parts.length - 1].toLowerCase();
-    return validExts.includes(ext);
-  });
-
-  if (validRecords.length === 0) {
-    alert('取り込めるファイル（.sch / .dtl / .csv / .txt）が見つかりませんでした。\n※フォルダごと取り込む場合は、下の青い「📁 フォルダごと選択して一括取込」ボタンをお使いください。');
-    resetImportModalState();
-    return;
-  }
-
-  const progEl = document.getElementById('importProgressText');
-  progEl.textContent = `全 ${validRecords.length} ファイルを読み込み中...`;
-
-  const fallbackDeptId = document.getElementById('importFallbackDept').value || depts[0].id;
-  const fallbackYM = document.getElementById('importFallbackYM').value || '2026-11';
-
-  // 1. ファイルをグループ分けしながら読み込む（20ファイルごとに画面の息継ぎを入れる）
-  const groups = {};
-  for (let idx = 0; idx < validRecords.length; idx++) {
-    const rec = validRecords[idx];
-    if (rec.folderName === '返流水設備') continue;
-    const matchedDept = depts.find(d => d.name === rec.folderName);
-    const deptId = matchedDept ? matchedDept.id : fallbackDeptId;
-
-    const nameParts = rec.file.name.split('.');
-    const ext = nameParts.pop().toLowerCase();
-    const baseName = nameParts.join('.');
-
-    let ymStr = fallbackYM;
-    if (baseName.length >= 6) {
-      const last6 = baseName.slice(-6);
-      if (isDigitsOnly(last6)) {
-        ymStr = last6.slice(0, 4) + '-' + last6.slice(4, 6);
-      }
-    }
-
-    const key = `${deptId}__${ymStr}`;
-    if (!groups[key]) groups[key] = { deptId, ymStr, schTexts: [], dtlTexts: [], csvTexts: [] };
-
-    const text = await readFileAsShiftJis(rec.file);
-    if (ext === 'dtl') groups[key].dtlTexts.push(text);
-    else if (ext === 'csv') groups[key].csvTexts.push(text);
-    else groups[key].schTexts.push(text);
-
-    if (idx % 20 === 0) {
-      progEl.textContent = `ファイル読込中... (${idx + 1} / ${validRecords.length})`;
-      await new Promise(r => setTimeout(r, 5));
-    }
-  }
-
-  // 2. 重複チェックを100倍高速化する「インデックス辞書(Map)」を作成
-  const existingMap = new Map();
-  events.forEach(ev => {
-    const sig = `${ev.deptId}|${ev.startDate}|${ev.endDate}|${ev.startTime || ''}|${ev.content}`;
-    existingMap.set(sig, ev);
-  });
-
-  const catNameMap = new Map();
-  categories.forEach(c => catNameMap.set(c.name, c));
-
-  let addedCount = 0;
-  let updatedCount = 0;
-  let skippedCount = 0;
-  let lastImportedDate = null;
-
-  const groupKeys = Object.keys(groups);
-  for (let gIdx = 0; gIdx < groupKeys.length; gIdx++) {
-    const grp = groups[groupKeys[gIdx]];
-    const [yearNum, monthNum] = grp.ymStr.split('-').map(Number);
-    const memoMap = {};
-    const schLines = [];
-
-    const combinedText = grp.dtlTexts.concat(grp.schTexts).join('\n');
-    const allRawLines = combinedText.split('\n').map(l => l.replace(/\r/g, '')).filter(l => l.trim().length > 0);
-
-    allRawLines.forEach(line => {
-      const commaIdx = line.indexOf(',');
-      const head3 = line.slice(0, 3);
-      if (commaIdx === 3 && isDigitsOnly(head3)) {
-        const memoId = head3;
-        const memoBody = line.slice(4).split(',').map(s => s.replace(/^"|"$/g, '').trim()).filter(Boolean).join('\n');
-        memoMap[memoId] = memoBody;
-      } else {
-        schLines.push(line);
-      }
-    });
-
-    schLines.forEach(line => {
-      if (line.length < 16) return;
-      const dayStr = line.slice(0, 2);
-      if (!isDigitsOnly(dayStr)) return;
-      const dayNum = parseInt(dayStr, 10);
-      const timeField = line.slice(2, 12).trim();
-
-      let flagIdx = -1;
-      for (let i = 12; i <= Math.min(line.length - 4, 34); i++) {
-        const sub = line.slice(i, i + 4);
-        if (/^[01]{4}$/.test(sub)) {
-          flagIdx = i;
-          break;
-        }
-      }
-      if (flagIdx === -1) return;
-
-      const catName = line.slice(12, flagIdx).trim();
-      const styleFlags = line.slice(flagIdx, flagIdx + 4);
-      let rest = line.slice(flagIdx + 4);
-
-      let startTime = '', endTime = '';
-      if (timeField.length >= 4) {
-        if (timeField.length >= 9) {
-          startTime = toHalfWidthAll(timeField.slice(0, 5).trim());
-          endTime = toHalfWidthAll(timeField.slice(5).trim());
-        } else {
-          startTime = toHalfWidthAll(timeField);
-        }
-      }
-
-      let spanDays = 1;
-      let memoId = '';
-      const trimmedRest = rest.trimEnd();
-      const lastSpaceIdx = trimmedRest.lastIndexOf(' ');
-      if (lastSpaceIdx !== -1) {
-        const lastToken = trimmedRest.slice(lastSpaceIdx + 1);
-        if (lastToken.includes('$') && lastToken.length >= 5 && isDigitsOnly(lastToken.slice(0, 5))) {
-          memoId = lastToken.slice(0, 3);
-          spanDays = Math.max(1, parseInt(lastToken.slice(3, 5), 10));
-          rest = trimmedRest.slice(0, lastSpaceIdx);
-        } else if (lastToken.length === 3 && isDigitsOnly(lastToken) && trimmedRest.slice(lastSpaceIdx - 1, lastSpaceIdx + 1) === '  ') {
-          memoId = lastToken;
-          rest = trimmedRest.slice(0, lastSpaceIdx);
-        }
-      }
-
-      const content = toHalfWidthAll(rest.trim()).slice(0, 35);
-      if (!content) return;
-      const startDateObj = new Date(yearNum, monthNum - 1, dayNum);
-      const endDateObj = addDays(startDateObj, spanDays - 1);
-      const sDateStr = formatDate(startDateObj);
-      const eDateStr = formatDate(endDateObj);
-      const catObj = catNameMap.get(catName) || categories[0];
-      const memoText = (memoId && memoId !== '000' && memoMap[memoId]) ? memoMap[memoId] : '';
-
-      const sig = `${grp.deptId}|${sDateStr}|${eDateStr}|${startTime}|${content}`;
-      const existing = existingMap.get(sig);
-
-      if (existing) {
-        let changed = false;
-        if (memoText && existing.memo !== memoText) { existing.memo = memoText; changed = true; }
-        if (existing.categoryId !== catObj.id && catObj.id !== 'c0') { existing.categoryId = catObj.id; changed = true; }
-        if (changed) updatedCount++;
-        else skippedCount++;
-      } else {
-        const newEv = {
-          id: 'gw_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
-          deptId: grp.deptId,
-          startDate: sDateStr,
-          endDate: eDateStr,
-          startTime,
-          endTime,
-          isMultiDay: spanDays > 1,
-          content,
-          categoryId: catObj.id,
-          bold: styleFlags[0] === '1',
-          italic: styleFlags[1] === '1',
-          underline: styleFlags[2] === '1',
-          strike: styleFlags[3] === '1',
-          memo: memoText
-        };
-        events.push(newEv);
-        existingMap.set(sig, newEv);
-        addedCount++;
-        lastImportedDate = startDateObj;
-      }
-    });
-
-    // 10ヶ月分処理するごとに0.01秒だけブラウザに息継ぎさせてフリーズを防止
-    if (gIdx % 10 === 0) {
-      progEl.textContent = `データ解析中... (${gIdx + 1} / ${groupKeys.length} グループ完了)`;
-      await new Promise(r => setTimeout(r, 5));
-    }
-  }
-
-  progEl.textContent = `クラウドへ保存中...`;
-  await new Promise(r => setTimeout(r, 10));
-
   try {
-    saveData();
-  } catch (e) {
-    console.warn('localStorage容量上限のためクラウド保存のみ実行します', e);
-  }
-  if (lastImportedDate) baseDate = lastImportedDate;
-  renderCalendar();
+    const validExts = ['sch', 'dtl', 'csv', 'txt'];
+    const validRecords = fileRecords.filter(r => {
+      if (!r.file || !r.file.name || r.file.size === 0) return false;
+      const parts = r.file.name.split('.');
+      if (parts.length < 2) return false;
+      const ext = parts[parts.length - 1].toLowerCase();
+      return validExts.includes(ext);
+    });
 
-  resetImportModalState();
-  closeImportModal();
-  alert(`インポートが完了しました！（クラウドへ自動保存中）\n・新規追加: ${addedCount} 件\n・差分更新: ${updatedCount} 件\n・重複スキップ: ${skippedCount} 件`);
+    if (validRecords.length === 0) {
+      alert('取り込めるファイル（.sch / .dtl / .csv / .txt）が見つかりませんでした。');
+      resetImportModalState();
+      return;
+    }
+
+    const progEl = document.getElementById('importProgressText');
+    progEl.textContent = `全 ${validRecords.length} ファイルを読み込み中...`;
+    await new Promise(r => setTimeout(r, 10));
+
+    const fallbackDeptId = document.getElementById('importFallbackDept').value || depts[0].id;
+    const fallbackYM = document.getElementById('importFallbackYM').value || '2026-11';
+    const LF = String.fromCharCode(10);
+
+    const groups = {};
+    for (let idx = 0; idx < validRecords.length; idx++) {
+      const rec = validRecords[idx];
+      if (rec.folderName === '返流水設備') continue;
+      const matchedDept = depts.find(d => d.name === rec.folderName);
+      const deptId = matchedDept ? matchedDept.id : fallbackDeptId;
+
+      const nameParts = rec.file.name.split('.');
+      const ext = nameParts.pop().toLowerCase();
+      const baseName = nameParts.join('.');
+
+      let ymStr = fallbackYM;
+      if (baseName.length >= 6) {
+        const last6 = baseName.slice(-6);
+        if (isDigitsOnly(last6)) {
+          ymStr = last6.slice(0, 4) + '-' + last6.slice(4, 6);
+        }
+      }
+
+      const key = `${deptId}__${ymStr}`;
+      if (!groups[key]) groups[key] = { deptId, ymStr, schTexts: [], dtlTexts: [], csvTexts: [] };
+
+      const text = await readFileAsShiftJis(rec.file);
+      if (ext === 'dtl') groups[key].dtlTexts.push(text);
+      else if (ext === 'csv') groups[key].csvTexts.push(text);
+      else groups[key].schTexts.push(text);
+
+      if (idx % 10 === 0) {
+        progEl.textContent = `ファイル読込中... (${idx + 1} / ${validRecords.length})`;
+        await new Promise(r => setTimeout(r, 5));
+      }
+    }
+
+    const existingMap = new Map();
+    events.forEach(ev => {
+      const sig = `${ev.deptId}|${ev.startDate}|${ev.endDate}|${ev.startTime || ''}|${ev.content}`;
+      existingMap.set(sig, ev);
+    });
+
+    const catNameMap = new Map();
+    categories.forEach(c => catNameMap.set(c.name, c));
+
+    let addedCount = 0;
+    let updatedCount = 0;
+    let skippedCount = 0;
+    let lastImportedDate = null;
+
+    const groupKeys = Object.keys(groups);
+    for (let gIdx = 0; gIdx < groupKeys.length; gIdx++) {
+      const grp = groups[groupKeys[gIdx]];
+      const [yearNum, monthNum] = grp.ymStr.split('-').map(Number);
+      const memoMap = {};
+      const schLines = [];
+
+      const combinedText = grp.dtlTexts.concat(grp.schTexts).join(LF);
+      const allRawLines = splitLinesSafe(combinedText);
+
+      allRawLines.forEach(line => {
+        const commaIdx = line.indexOf(',');
+        const head3 = line.slice(0, 3);
+        if (commaIdx === 3 && isDigitsOnly(head3)) {
+          const memoId = head3;
+          const memoBody = line.slice(4).split(',').map(s => s.replace(/^"|"$/g, '').trim()).filter(Boolean).join(LF);
+          memoMap[memoId] = memoBody;
+        } else {
+          schLines.push(line);
+        }
+      });
+
+      schLines.forEach(line => {
+        if (line.length < 16) return;
+        const dayStr = line.slice(0, 2);
+        if (!isDigitsOnly(dayStr)) return;
+        const dayNum = parseInt(dayStr, 10);
+        const timeField = line.slice(2, 12).trim();
+
+        let flagIdx = -1;
+        for (let i = 12; i <= Math.min(line.length - 4, 34); i++) {
+          const sub = line.slice(i, i + 4);
+          if (/^[01]{4}$/.test(sub)) {
+            flagIdx = i;
+            break;
+          }
+        }
+        if (flagIdx === -1) return;
+
+        const catName = line.slice(12, flagIdx).trim();
+        const styleFlags = line.slice(flagIdx, flagIdx + 4);
+        let rest = line.slice(flagIdx + 4);
+
+        let startTime = '', endTime = '';
+        if (timeField.length >= 4) {
+          if (timeField.length >= 9) {
+            startTime = toHalfWidthAll(timeField.slice(0, 5).trim());
+            endTime = toHalfWidthAll(timeField.slice(5).trim());
+          } else {
+            startTime = toHalfWidthAll(timeField);
+          }
+        }
+
+        let spanDays = 1;
+        let memoId = '';
+        const trimmedRest = rest.trimEnd();
+        const lastSpaceIdx = trimmedRest.lastIndexOf(' ');
+        if (lastSpaceIdx !== -1) {
+          const lastToken = trimmedRest.slice(lastSpaceIdx + 1);
+          if (lastToken.includes('$') && lastToken.length >= 5 && isDigitsOnly(lastToken.slice(0, 5))) {
+            memoId = lastToken.slice(0, 3);
+            spanDays = Math.max(1, parseInt(lastToken.slice(3, 5), 10));
+            rest = trimmedRest.slice(0, lastSpaceIdx);
+          } else if (lastToken.length === 3 && isDigitsOnly(lastToken) && trimmedRest.slice(lastSpaceIdx - 1, lastSpaceIdx + 1) === '  ') {
+            memoId = lastToken;
+            rest = trimmedRest.slice(0, lastSpaceIdx);
+          }
+        }
+
+        const content = toHalfWidthAll(rest.trim()).slice(0, 35);
+        if (!content) return;
+        const startDateObj = new Date(yearNum, monthNum - 1, dayNum);
+        const endDateObj = addDays(startDateObj, spanDays - 1);
+        const sDateStr = formatDate(startDateObj);
+        const eDateStr = formatDate(endDateObj);
+        const catObj = catNameMap.get(catName) || categories[0];
+        const memoText = (memoId && memoId !== '000' && memoMap[memoId]) ? memoMap[memoId] : '';
+
+        const sig = `${grp.deptId}|${sDateStr}|${eDateStr}|${startTime}|${content}`;
+        const existing = existingMap.get(sig);
+
+        if (existing) {
+          let changed = false;
+          if (memoText && existing.memo !== memoText) { existing.memo = memoText; changed = true; }
+          if (existing.categoryId !== catObj.id && catObj.id !== 'c0') { existing.categoryId = catObj.id; changed = true; }
+          if (changed) updatedCount++;
+          else skippedCount++;
+        } else {
+          const newEv = {
+            id: 'gw_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
+            deptId: grp.deptId,
+            startDate: sDateStr,
+            endDate: eDateStr,
+            startTime,
+            endTime,
+            isMultiDay: spanDays > 1,
+            content,
+            categoryId: catObj.id,
+            bold: styleFlags[0] === '1',
+            italic: styleFlags[1] === '1',
+            underline: styleFlags[2] === '1',
+            strike: styleFlags[3] === '1',
+            memo: memoText
+          };
+          events.push(newEv);
+          existingMap.set(sig, newEv);
+          addedCount++;
+          lastImportedDate = startDateObj;
+        }
+      });
+
+      splitLinesSafe(grp.csvTexts.join(LF)).forEach(line => {
+        if (!line.includes(',')) return;
+        const cols = line.split(',');
+        if (cols[0] === 'Subject' || cols[0] === '件名') return;
+        if (cols.length >= 2) {
+          const dParts = cols[1].trim().split(/[-/]/).map(Number);
+          if (dParts.length === 3 && dParts[0] > 1990) {
+            const sDateObj = new Date(dParts[0], dParts[1] - 1, dParts[2]);
+            const sDateStr = formatDate(sDateObj);
+            const content = toHalfWidthAll(cols[0].replace(/^"|"$/g, '').trim()).slice(0, 35);
+            if (!content) return;
+            const sig = `${grp.deptId}|${sDateStr}|${sDateStr}||${content}`;
+            if (existingMap.has(sig)) { skippedCount++; }
+            else {
+              const newEv = {
+                id: 'csv_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
+                deptId: grp.deptId, startDate: sDateStr, endDate: sDateStr, startTime: '', endTime: '',
+                isMultiDay: false, content, categoryId: 'c0', bold: false, italic: false, underline: false, strike: false, memo: ''
+              };
+              events.push(newEv);
+              existingMap.set(sig, newEv);
+              addedCount++;
+              lastImportedDate = sDateObj;
+            }
+          }
+        }
+      });
+
+      if (gIdx % 5 === 0) {
+        progEl.textContent = `データ解析中... (${gIdx + 1} / ${groupKeys.length} ヶ月分)`;
+        await new Promise(r => setTimeout(r, 5));
+      }
+    }
+
+    saveData();
+    if (lastImportedDate) baseDate = lastImportedDate;
+    renderCalendar();
+
+    resetImportModalState();
+    closeImportModal();
+    alert(`インポートが完了しました！（クラウドへ自動保存中）\n・新規追加: ${addedCount} 件\n・差分更新: ${updatedCount} 件\n・重複スキップ: ${skippedCount} 件`);
+  } catch (err) {
+    alert('インポート処理中にエラーが発生しました: ' + err);
+    resetImportModalState();
+  }
 }
  
 // ================= 日付ユーティリティ =================
