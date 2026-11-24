@@ -701,7 +701,7 @@ function callCloudSave(payload, onSuccess, onError) {
 }
 
 // ================= ログイン・パスワード制御 =================
-function getUserPassword() { return localStorage.getItem('gw_user_pw') || '1234'; }
+function getUserPassword() { return localStorage.getItem('gw_user_pw') || 'seibujv'; }
 function getAdminPassword() { return localStorage.getItem('gw_admin_pw') || 'admin'; }
 function checkLoginOnStart() {
   if (localStorage.getItem('gw_auto_login') === 'true') {
@@ -904,14 +904,31 @@ function ensureFolderSelectButton() {
   const dz = document.getElementById('importDropZone');
   if (!dz) return;
   const wrap = document.createElement('div');
-  wrap.style.cssText = 'text-align:center; margin-bottom:8px;';
+  wrap.style.cssText = 'text-align:center; margin-bottom:8px; display:flex; flex-direction:column; gap:6px; align-items:center;';
   wrap.innerHTML = `
-    <button type="button" class="btn" style="padding:6px 14px; font-weight:bold; background:#2b579a; color:#fff; border:none; border-radius:4px;" onclick="document.getElementById('importFolderInput').click()">
+    <button type="button" class="btn" style="padding:6px 14px; font-weight:bold; background:#2b579a; color:#fff; border:none; border-radius:4px; width:100%; max-width:420px;" onclick="document.getElementById('importFolderInput').click()">
       📁 フォルダごと選択して一括取込（「部署」親フォルダ・各部署フォルダ対応）
+    </button>
+    <button type="button" class="btn btn-danger" style="padding:4px 10px; font-size:12px;" onclick="clearSelectedDeptEventsUI()">
+      🧹 上で選択中の「部署」の予定のみをすべてクリア（やり直し用・要管理者PW）
     </button>
     <input type="file" id="importFolderInput" webkitdirectory directory multiple style="display:none;" onchange="onImportFolderSelect(this)">
   `;
   dz.parentNode.insertBefore(wrap, dz.nextSibling);
+}
+
+// インポート画面で選択されている特定の部署の予定だけをリセットする関数
+function clearSelectedDeptEventsUI() {
+  const deptId = document.getElementById('importFallbackDept').value;
+  const deptObj = depts.find(d => d.id === deptId);
+  if (!deptObj) return;
+  const count = events.filter(ev => ev.deptId === deptId).length;
+  const pw = prompt(`【確認】「${deptObj.name}」に登録されている全 ${count} 件の予定のみをクリア（削除）します。\n（他の部署の予定は消えません）\nよろしければ管理者パスワードを入力してください。`);
+  if (pw !== getAdminPassword()) { alert('管理者パスワードが違います。'); return; }
+  events = events.filter(ev => ev.deptId !== deptId);
+  saveData();
+  renderCalendar();
+  alert(`「${deptObj.name}」の予定（${count} 件）をクリアしました！\n続けて正しい「${deptObj.name}」のデータをインポートしてください。`);
 }
 
 function openImportModal() {
@@ -1386,13 +1403,38 @@ function renderMonthView(container) {
 function buildWeekRowGridHtml(deptId, days, gridClass, isMonthMode, currentMonth = null) {
   const startStr = formatDate(days[0]), endStr = formatDate(days[days.length - 1]);
   const rowEvents = events.filter(ev => ev.deptId === deptId && !(ev.endDate < startStr || ev.startDate > endStr));
-  rowEvents.sort((a, b) => {
-    const aSpan = (a.isMultiDay || a.startDate !== a.endDate) ? 1 : 0;
-    const bSpan = (b.isMultiDay || b.startDate !== b.endDate) ? 1 : 0;
-    if (aSpan !== bSpan) return bSpan - aSpan;
-    if (a.startDate !== b.startDate) return a.startDate.localeCompare(b.startDate);
-    return (a.startTime || '').localeCompare(b.startTime || '');
+
+  // 1. 複数日予定（横長の帯）と、単日予定（1日だけの予定）を分離する
+  const multiEvents = [];
+  const singleEventsByDay = Array.from({ length: days.length }, () => []);
+
+  rowEvents.forEach(ev => {
+    const isMulti = ev.isMultiDay || (ev.startDate !== ev.endDate);
+    if (isMulti) {
+      multiEvents.push(ev);
+    } else {
+      const dIdx = days.findIndex(d => formatDate(d) === ev.startDate);
+      if (dIdx !== -1) singleEventsByDay[dIdx].push(ev);
+    }
   });
+
+  // 複数日予定は開始日順・期間が長い順にソート
+  multiEvents.sort((a, b) => {
+    if (a.startDate !== b.startDate) return a.startDate.localeCompare(b.startDate);
+    return b.endDate.localeCompare(a.endDate);
+  });
+
+  // 各日の単日予定は時刻なし（終日）を上、時刻付きを時間順にソート
+  singleEventsByDay.forEach(list => {
+    list.sort((a, b) => {
+      const tA = a.startTime || '';
+      const tB = b.startTime || '';
+      if (!tA && tB) return -1;
+      if (tA && !tB) return 1;
+      return tA.localeCompare(tB);
+    });
+  });
+
   let html = `<div class="row-wrapper ${isMonthMode ? 'month-mode' : ''}"><div class="bg-grid ${gridClass}">`;
   days.forEach(d => {
     const dStr = formatDate(d);
@@ -1409,7 +1451,23 @@ function buildWeekRowGridHtml(deptId, days, gridClass, isMonthMode, currentMonth
   if (isMonthMode) html += `<div class="month-day-spacer" style="grid-column: 1 / -1; grid-row: 1;"></div>`;
   const baseRowOffset = isMonthMode ? 2 : 1;
   const lanes = [];
-  rowEvents.forEach(ev => {
+
+  // 予定バーのHTMLを生成する共通補助関数
+  const renderBarHtml = (ev, colStart, span, gridRow, isMultiBar) => {
+    const cat = categories.find(c => c.id === ev.categoryId) || categories[0];
+    const isTrans = !cat || cat.bgColor === 'transparent';
+    let fontStyles = (ev.bold ? 'font-weight:bold;' : '') + (ev.italic ? 'font-style:italic;' : '');
+    const decos = []; if (ev.underline) decos.push('underline'); if (ev.strike) decos.push('line-through');
+    if (decos.length) fontStyles += `text-decoration:${decos.join(' ')};`;
+    const timePrefix = (ev.startTime && ev.endTime) ? `${ev.startTime}-${ev.endTime} ` : (ev.startTime ? `${ev.startTime} ` : '');
+    const hasMemo = ev.memo && ev.memo.trim().length > 0;
+    const displayContent = timePrefix + ev.content + (hasMemo ? '/★' : '');
+    const titleAttr = hasMemo ? `【詳細メモ】\n${ev.memo}` : ev.content;
+    return `<div class="event-bar ${isTrans ? 'transparent-bg' : ''} ${isMultiBar ? 'multi-day-bar' : ''} ${selectedEventId === ev.id ? 'selected-event' : ''}" draggable="true" style="grid-column:${colStart} / span ${span}; grid-row:${gridRow}; background:${isTrans ? 'transparent' : cat.bgColor}; color:${cat ? cat.textColor : '#000'}; ${fontStyles}" title="${escapeHtml(titleAttr)}" onclick="selectEventBar(event, '${ev.id}', '${deptId}', '${ev.startDate}')" ondblclick="event.stopPropagation(); openEventModalEdit('${ev.id}')" oncontextmenu="onEventContextMenu(event, '${ev.id}', '${deptId}', '${ev.startDate}')" ondragstart="onEventDragStart(event, '${ev.id}')">${escapeHtml(displayContent)}</div>`;
+  };
+
+  // ① まず複数日予定（帯）を上のレーンに配置
+  multiEvents.forEach(ev => {
     const sIdx = Math.max(0, days.findIndex(d => formatDate(d) >= ev.startDate));
     let eIdx = days.findIndex(d => formatDate(d) > ev.endDate);
     if (eIdx === -1) eIdx = days.length;
@@ -1419,24 +1477,28 @@ function buildWeekRowGridHtml(deptId, days, gridClass, isMonthMode, currentMonth
       if (!lanes[laneIndex]) lanes[laneIndex] = Array(days.length).fill(false);
       let conflict = false;
       for (let c = sIdx; c < sIdx + span; c++) if (lanes[laneIndex][c]) { conflict = true; break; }
-      if (!conflict) { for (let c = sIdx; c < sIdx + span; c++) lanes[laneIndex][c] = true; break; }
+      if (!conflict) {
+        for (let c = sIdx; c < sIdx + span; c++) lanes[laneIndex][c] = true;
+        break;
+      }
       laneIndex++;
     }
-    const cat = categories.find(c => c.id === ev.categoryId) || categories[0];
-    const isTrans = !cat || cat.bgColor === 'transparent';
-    let fontStyles = (ev.bold ? 'font-weight:bold;' : '') + (ev.italic ? 'font-style:italic;' : '');
-    const decos = []; if (ev.underline) decos.push('underline'); if (ev.strike) decos.push('line-through');
-    if (decos.length) fontStyles += `text-decoration:${decos.join(' ')};`;
-    const timePrefix = (ev.startTime && ev.endTime) ? `${ev.startTime}-${ev.endTime} ` : (ev.startTime ? `${ev.startTime} ` : '');
-    const hasMemo = ev.memo && ev.memo.trim().length > 0;
-    const displayContent = timePrefix + ev.content + (hasMemo ? '/★' : '');
-    const isMultiBar = ev.isMultiDay || (ev.startDate !== ev.endDate);
-    const titleAttr = hasMemo ? `【詳細メモ】\n${ev.memo}` : ev.content;
-    html += `<div class="event-bar ${isTrans ? 'transparent-bg' : ''} ${isMultiBar ? 'multi-day-bar' : ''} ${selectedEventId === ev.id ? 'selected-event' : ''}" draggable="true" style="grid-column:${sIdx + 1} / span ${span}; grid-row:${baseRowOffset + laneIndex}; background:${isTrans ? 'transparent' : cat.bgColor}; color:${cat ? cat.textColor : '#000'}; ${fontStyles}" title="${escapeHtml(titleAttr)}" onclick="selectEventBar(event, '${ev.id}', '${deptId}', '${ev.startDate}')" ondblclick="event.stopPropagation(); openEventModalEdit('${ev.id}')" oncontextmenu="onEventContextMenu(event, '${ev.id}', '${deptId}', '${ev.startDate}')" ondragstart="onEventDragStart(event, '${ev.id}')">${escapeHtml(displayContent)}</div>`;
+    html += renderBarHtml(ev, sIdx + 1, span, baseRowOffset + laneIndex, true);
   });
+
+  // ② 次に各日の単日予定を、その日の空いている一番上の段から隙間なく詰めて配置
+  const multiLaneCount = lanes.length;
+  singleEventsByDay.forEach((dayEvList, dIdx) => {
+    let currentRow = baseRowOffset + multiLaneCount;
+    dayEvList.forEach(ev => {
+      html += renderBarHtml(ev, dIdx + 1, 1, currentRow, false);
+      currentRow++;
+    });
+  });
+
   return html + `</div></div>`;
 }
-
+ 
 // ================= 選択・コピペ・削除・ドラッグ制御 =================
 function selectCell(e, deptId, dateStr) {
   hideContextMenu();
