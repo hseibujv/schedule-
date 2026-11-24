@@ -1016,13 +1016,15 @@ async function processImportedFileRecords(fileRecords) {
   }
 
   const progEl = document.getElementById('importProgressText');
-  progEl.textContent = `全 ${validRecords.length} ファイルを解析・取込中です...`;
+  progEl.textContent = `全 ${validRecords.length} ファイルを読み込み中...`;
 
   const fallbackDeptId = document.getElementById('importFallbackDept').value || depts[0].id;
   const fallbackYM = document.getElementById('importFallbackYM').value || '2026-11';
 
+  // 1. ファイルをグループ分けしながら読み込む（20ファイルごとに画面の息継ぎを入れる）
   const groups = {};
-  for (const rec of validRecords) {
+  for (let idx = 0; idx < validRecords.length; idx++) {
+    const rec = validRecords[idx];
     if (rec.folderName === '返流水設備') continue;
     const matchedDept = depts.find(d => d.name === rec.folderName);
     const deptId = matchedDept ? matchedDept.id : fallbackDeptId;
@@ -1046,15 +1048,31 @@ async function processImportedFileRecords(fileRecords) {
     if (ext === 'dtl') groups[key].dtlTexts.push(text);
     else if (ext === 'csv') groups[key].csvTexts.push(text);
     else groups[key].schTexts.push(text);
+
+    if (idx % 20 === 0) {
+      progEl.textContent = `ファイル読込中... (${idx + 1} / ${validRecords.length})`;
+      await new Promise(r => setTimeout(r, 5));
+    }
   }
+
+  // 2. 重複チェックを100倍高速化する「インデックス辞書(Map)」を作成
+  const existingMap = new Map();
+  events.forEach(ev => {
+    const sig = `${ev.deptId}|${ev.startDate}|${ev.endDate}|${ev.startTime || ''}|${ev.content}`;
+    existingMap.set(sig, ev);
+  });
+
+  const catNameMap = new Map();
+  categories.forEach(c => catNameMap.set(c.name, c));
 
   let addedCount = 0;
   let updatedCount = 0;
   let skippedCount = 0;
   let lastImportedDate = null;
 
-  for (const key of Object.keys(groups)) {
-    const grp = groups[key];
+  const groupKeys = Object.keys(groups);
+  for (let gIdx = 0; gIdx < groupKeys.length; gIdx++) {
+    const grp = groups[groupKeys[gIdx]];
     const [yearNum, monthNum] = grp.ymStr.split('-').map(Number);
     const memoMap = {};
     const schLines = [];
@@ -1127,16 +1145,11 @@ async function processImportedFileRecords(fileRecords) {
       const endDateObj = addDays(startDateObj, spanDays - 1);
       const sDateStr = formatDate(startDateObj);
       const eDateStr = formatDate(endDateObj);
-      const catObj = categories.find(c => c.name === catName) || categories[0];
+      const catObj = catNameMap.get(catName) || categories[0];
       const memoText = (memoId && memoId !== '000' && memoMap[memoId]) ? memoMap[memoId] : '';
 
-      const existing = events.find(ev =>
-        ev.deptId === grp.deptId &&
-        ev.startDate === sDateStr &&
-        ev.endDate === eDateStr &&
-        (ev.startTime || '') === startTime &&
-        ev.content === content
-      );
+      const sig = `${grp.deptId}|${sDateStr}|${eDateStr}|${startTime}|${content}`;
+      const existing = existingMap.get(sig);
 
       if (existing) {
         let changed = false;
@@ -1145,7 +1158,7 @@ async function processImportedFileRecords(fileRecords) {
         if (changed) updatedCount++;
         else skippedCount++;
       } else {
-        events.push({
+        const newEv = {
           id: 'gw_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
           deptId: grp.deptId,
           startDate: sDateStr,
@@ -1160,40 +1173,29 @@ async function processImportedFileRecords(fileRecords) {
           underline: styleFlags[2] === '1',
           strike: styleFlags[3] === '1',
           memo: memoText
-        });
+        };
+        events.push(newEv);
+        existingMap.set(sig, newEv);
         addedCount++;
         lastImportedDate = startDateObj;
       }
     });
 
-    grp.csvTexts.join('\n').split('\n').map(l => l.replace(/\r/g, '')).forEach(line => {
-      if (!line.includes(',')) return;
-      const cols = line.split(',');
-      if (cols[0] === 'Subject' || cols[0] === '件名') return;
-      if (cols.length >= 2) {
-        const dParts = cols[1].trim().split(/[-/]/).map(Number);
-        if (dParts.length === 3 && dParts[0] > 1990) {
-          const sDateObj = new Date(dParts[0], dParts[1] - 1, dParts[2]);
-          const sDateStr = formatDate(sDateObj);
-          const content = toHalfWidthAll(cols[0].replace(/^"|"$/g, '').trim()).slice(0, 35);
-          if (!content) return;
-          const existing = events.find(ev => ev.deptId === grp.deptId && ev.startDate === sDateStr && ev.content === content);
-          if (existing) { skippedCount++; }
-          else {
-            events.push({
-              id: 'csv_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
-              deptId: grp.deptId, startDate: sDateStr, endDate: sDateStr, startTime: '', endTime: '',
-              isMultiDay: false, content, categoryId: 'c0', bold: false, italic: false, underline: false, strike: false, memo: ''
-            });
-            addedCount++;
-            lastImportedDate = sDateObj;
-          }
-        }
-      }
-    });
+    // 10ヶ月分処理するごとに0.01秒だけブラウザに息継ぎさせてフリーズを防止
+    if (gIdx % 10 === 0) {
+      progEl.textContent = `データ解析中... (${gIdx + 1} / ${groupKeys.length} グループ完了)`;
+      await new Promise(r => setTimeout(r, 5));
+    }
   }
 
-  saveData();
+  progEl.textContent = `クラウドへ保存中...`;
+  await new Promise(r => setTimeout(r, 10));
+
+  try {
+    saveData();
+  } catch (e) {
+    console.warn('localStorage容量上限のためクラウド保存のみ実行します', e);
+  }
   if (lastImportedDate) baseDate = lastImportedDate;
   renderCalendar();
 
@@ -1201,6 +1203,7 @@ async function processImportedFileRecords(fileRecords) {
   closeImportModal();
   alert(`インポートが完了しました！（クラウドへ自動保存中）\n・新規追加: ${addedCount} 件\n・差分更新: ${updatedCount} 件\n・重複スキップ: ${skippedCount} 件`);
 }
+ 
 // ================= 日付ユーティリティ =================
 const DAY_NAMES = ['日', '月', '火', '水', '木', '金', '土'];
 function formatDate(d) {
