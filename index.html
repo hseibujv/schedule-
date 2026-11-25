@@ -527,7 +527,7 @@ const DEFAULT_CATEGORIES = [
 
 const DEFAULT_EVENTS = [];
 
-// 日本の祝日・振替休日・国民の休日を1990年〜2060年まで自動生成する関数
+// 日本の祝日・振替休日・国民の休日・年末年始休みを1990年〜2060年まで自動生成する関数
 const HOLIDAYS = (function() {
   const map = {};
   const pad = n => String(n).padStart(2, '0');
@@ -537,7 +537,7 @@ const HOLIDAYS = (function() {
     return `${y}-${pad(m)}-${pad(d)}`;
   };
   for (let y = 1990; y <= 2060; y++) {
-    // 固定祝日
+    // 固定祝日（土曜日と重なっても祝祭日色になります）
     map[`${y}-01-01`] = '元日';
     map[`${y}-02-11`] = '建国記念の日';
     if (y >= 2020) map[`${y}-02-23`] = '天皇誕生日';
@@ -561,7 +561,7 @@ const HOLIDAYS = (function() {
     map[`${y}-03-${pad(vernal)}`] = '春分の日';
     map[`${y}-09-${pad(autumn)}`] = '秋分の日';
 
-    // 国民の休日（敬老の日と秋分の日に挟まれた火曜日など）
+    // 国民の休日（敬老の日と秋分の日に挟まれた平日など）
     for (let m = 1; m <= 12; m++) {
       const lastD = new Date(y, m, 0).getDate();
       for (let d = 2; d < lastD; d++) {
@@ -593,6 +593,12 @@ const HOLIDAYS = (function() {
         }
       }
     }
+
+    // 年末年始休み（12/29〜12/31、1/2〜1/3）：土曜日も含めてすべて祝祭日色（薄い赤）にする
+    [[1, 2], [1, 3], [12, 29], [12, 30], [12, 31]].forEach(([m, d]) => {
+      const key = `${y}-${pad(m)}-${pad(d)}`;
+      if (!map[key]) map[key] = ' '; // 祝日名は出さず背景色・文字色を祝祭日色（赤）にする
+    });
   }
   return map;
 })();
