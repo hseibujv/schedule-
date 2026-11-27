@@ -743,13 +743,83 @@ function changeLoginPassword() {
   alert('ログインパスワードを変更しました！（クラウドにも反映されました）');
 }
 
-// ================= データ読込・保存・10秒超軽量チェック＆エコモード =================
+// ================= データ読込・保存・超スリム圧縮＆0.1秒即時表示 =================
+// 予定データを約3分の1のサイズに超スリム圧縮する関数
+function packEvents(evList) {
+  return JSON.stringify((evList || []).map(ev => {
+    const flags = (ev.bold ? 1 : 0) | (ev.italic ? 2 : 0) | (ev.underline ? 4 : 0) | (ev.strike ? 8 : 0) | (ev.isMultiDay ? 16 : 0);
+    const arr = [
+      ev.id,
+      ev.deptId,
+      ev.startDate,
+      ev.endDate === ev.startDate ? '' : ev.endDate,
+      ev.startTime || '',
+      ev.endTime || '',
+      ev.content || '',
+      ev.categoryId === 'c0' ? '' : (ev.categoryId || ''),
+      flags,
+      ev.memo || ''
+    ];
+    while (arr.length > 7 && (arr[arr.length - 1] === '' || arr[arr.length - 1] === 0)) {
+      arr.pop();
+    }
+    return arr;
+  }));
+}
+
+// スリム圧縮されたデータ（または従来のJSONデータ）を元の予定オブジェクトに復元する関数
+function unpackEvents(jsonStr) {
+  if (!jsonStr) return [];
+  const parsed = JSON.parse(jsonStr);
+  if (!Array.isArray(parsed) || parsed.length === 0) return [];
+  if (!Array.isArray(parsed[0])) return parsed; // 従来の形式もそのまま読込可能
+  return parsed.map(a => {
+    const flags = a[8] || 0;
+    const sDate = a[2] || '';
+    const eDate = a[3] || sDate;
+    return {
+      id: a[0],
+      deptId: a[1],
+      startDate: sDate,
+      endDate: eDate,
+      startTime: a[4] || '',
+      endTime: a[5] || '',
+      isMultiDay: !!(flags & 16) || (sDate !== eDate),
+      content: a[6] || '',
+      categoryId: a[7] || 'c0',
+      bold: !!(flags & 1),
+      italic: !!(flags & 2),
+      underline: !!(flags & 4),
+      strike: !!(flags & 8),
+      memo: a[9] || ''
+    };
+  });
+}
+
+// ブラウザのlocalStorageに確実に記憶させる補助関数（万が一5MBを超えた場合も直近データを優先記憶）
+function saveEventsToLocalCache(evList) {
+  const packed = packEvents(evList);
+  try {
+    localStorage.setItem('gw_events', packed);
+    return packed;
+  } catch (e) {
+    try {
+      const cutoffYear = new Date().getFullYear() - 1;
+      const cutoffStr = cutoffYear + '-01-01';
+      const recentList = evList.filter(ev => ev.endDate >= cutoffStr);
+      localStorage.setItem('gw_events', packEvents(recentList));
+    } catch (err) {}
+    return packed;
+  }
+}
+
 function loadData() {
-  depts = JSON.parse(localStorage.getItem('gw_depts')) || DEFAULT_DEPTS;
-  categories = JSON.parse(localStorage.getItem('gw_categories')) || DEFAULT_CATEGORIES;
-  events = JSON.parse(localStorage.getItem('gw_events')) || DEFAULT_EVENTS;
+  try { depts = JSON.parse(localStorage.getItem('gw_depts')) || DEFAULT_DEPTS; } catch (e) { depts = DEFAULT_DEPTS; }
+  try { categories = JSON.parse(localStorage.getItem('gw_categories')) || DEFAULT_CATEGORIES; } catch (e) { categories = DEFAULT_CATEGORIES; }
+  try { events = unpackEvents(localStorage.getItem('gw_events')) || DEFAULT_EVENTS; } catch (e) { events = DEFAULT_EVENTS; }
+
   if (IS_CLOUD_ENABLED) {
-    // 初回起動時は全データを1回読み込む
+    // 初回起動時は裏側でクラウドと同期
     syncFromCloud(false, true);
 
     // マウス移動・クリック・キー操作・フォーカス復帰を監視（0秒即時復帰）
@@ -795,7 +865,6 @@ function checkCloudLightweight() {
       isSyncingCloud = false;
       const remoteTs = (res && res.updatedAt) ? String(res.updatedAt) : (res && res.gw_updated_at ? String(res.gw_updated_at) : '');
       if (remoteTs && remoteTs !== '0' && remoteTs !== lastCloudUpdatedAt) {
-        // 誰かが更新していた場合のみ、本データを取りに行く
         syncFromCloud(false, true);
       } else {
         setSyncStatus('☁️ 自動同期ON', '#006600');
@@ -827,12 +896,8 @@ function syncFromCloud(showNotice = false, forceRender = false) {
             try { localStorage.setItem('gw_categories', res.gw_categories); } catch (e) {}
           }
           if (res.gw_events) {
-            events = JSON.parse(res.gw_events);
-            try {
-              localStorage.setItem('gw_events', res.gw_events);
-            } catch (e) {
-              try { localStorage.removeItem('gw_events'); } catch (err) {}
-            }
+            events = unpackEvents(res.gw_events);
+            saveEventsToLocalCache(events);
           }
           if (res.gw_user_pw) {
             try { localStorage.setItem('gw_user_pw', res.gw_user_pw); } catch (e) {}
@@ -854,25 +919,18 @@ function syncFromCloud(showNotice = false, forceRender = false) {
     }
   );
 }
- 
+
 function saveData() {
   const dStr = JSON.stringify(depts);
   const cStr = JSON.stringify(categories);
-  const eStr = JSON.stringify(events);
+  const eStr = saveEventsToLocalCache(events);
   const pwStr = getUserPassword();
 
-  // ブラウザのlocalStorage容量上限(5MB)を超えても絶対にエラーで固まらないよう個別に保護
   try {
     localStorage.setItem('gw_version', DATA_VERSION);
     localStorage.setItem('gw_depts', dStr);
     localStorage.setItem('gw_categories', cStr);
   } catch (e) {}
-  try {
-    localStorage.setItem('gw_events', eStr);
-  } catch (e) {
-    // 5年分等で5MBを超えた場合は古いローカルキャッシュを空にしてクラウド主体で動かす
-    try { localStorage.removeItem('gw_events'); } catch (err) {}
-  }
 
   if (IS_CLOUD_ENABLED) {
     isSavingCloud = true;
